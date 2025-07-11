@@ -16,6 +16,9 @@ import matplotlib.pyplot as plt
 np.random.seed(42)
 tf.random.set_seed(42)
 
+# Enable mixed precision training for better GPU performance
+tf.keras.mixed_precision.set_global_policy('mixed_float16')
+
 # GPU Configuration function
 def configure_gpus():
     """
@@ -236,23 +239,23 @@ def build_model(input_shape, output_units, activation_type='mixed', optimizer_ty
         with strategy.scope():
             model = Sequential([
                 Dense(64, activation=activations[0], input_shape=input_shape,
-                    kernel_regularizer=l2(0.01)),
-                BatchNormalization(),
+                    kernel_regularizer=l2(0.01), dtype='float16'),
+                BatchNormalization(dtype='float16'),
                 Dropout(0.3),
                 
-                Dense(24, activation=activations[1], kernel_regularizer=l2(0.01)),
-                BatchNormalization(),
+                Dense(24, activation=activations[1], kernel_regularizer=l2(0.01), dtype='float16'),
+                BatchNormalization(dtype='float16'),
                 Dropout(0.3),
                 
-                Dense(12, activation=activations[2], kernel_regularizer=l2(0.01)),
-                BatchNormalization(),
+                Dense(12, activation=activations[2], kernel_regularizer=l2(0.01), dtype='float16'),
+                BatchNormalization(dtype='float16'),
                 Dropout(0.2),
                 
-                Dense(8, activation=activations[3], kernel_regularizer=l2(0.01)),
-                BatchNormalization(),
+                Dense(8, activation=activations[3], kernel_regularizer=l2(0.01), dtype='float16'),
+                BatchNormalization(dtype='float16'),
                 Dropout(0.1),
 
-                Dense(output_units, activation=activations[4], kernel_regularizer=l2(0.01)),
+                Dense(output_units, activation=activations[4], kernel_regularizer=l2(0.01), dtype='float16'),
             ])
             
             # Choose optimizer
@@ -274,23 +277,23 @@ def build_model(input_shape, output_units, activation_type='mixed', optimizer_ty
         # Build model without distribution strategy
         model = Sequential([
             Dense(64, activation=activations[0], input_shape=input_shape,
-                kernel_regularizer=l2(0.01)),
-            BatchNormalization(),
+                kernel_regularizer=l2(0.01), dtype='float16'),
+            BatchNormalization(dtype='float16'),
             Dropout(0.3),
             
-            Dense(24, activation=activations[1], kernel_regularizer=l2(0.01)),
-            BatchNormalization(),
+            Dense(24, activation=activations[1], kernel_regularizer=l2(0.01), dtype='float16'),
+            BatchNormalization(dtype='float16'),
             Dropout(0.3),
             
-            Dense(12, activation=activations[2], kernel_regularizer=l2(0.01)),
-            BatchNormalization(),
+            Dense(12, activation=activations[2], kernel_regularizer=l2(0.01), dtype='float16'),
+            BatchNormalization(dtype='float16'),
             Dropout(0.2),
             
-            Dense(8, activation=activations[3], kernel_regularizer=l2(0.01)),
-            BatchNormalization(),
+            Dense(8, activation=activations[3], kernel_regularizer=l2(0.01), dtype='float16'),
+            BatchNormalization(dtype='float16'),
             Dropout(0.1),
 
-            Dense(output_units, activation=activations[4], kernel_regularizer=l2(0.01)),
+            Dense(output_units, activation=activations[4], kernel_regularizer=l2(0.01), dtype='float16'),
         ])
         
         # Choose optimizer
@@ -533,11 +536,11 @@ if __name__ == "__main__":
     # Monitor GPU memory
     monitor_gpu_memory()
     
-    # Load data
+    # Load data with float16 precision
     import h5py
     with h5py.File('training_data.h5', 'r') as f:
-        X = np.array(f['X'][:], dtype=np.float32)
-        Y = np.array(f['Y'][:], dtype=np.float32)
+        X = np.array(f['X'][:], dtype=np.float16)
+        Y = np.array(f['Y'][:], dtype=np.float16)
 
     # Auto transpose data to have samples as first dimension
     # X: (366, 17108) -> (17108, 366)
@@ -546,11 +549,14 @@ if __name__ == "__main__":
         X = X.T
         Y = Y.T
 
+    # Convert to float16 for GPU performance
+    Y = tf.cast(Y, tf.float16)
     Y = tf.clip_by_value(Y, clip_value_min=-90.0, clip_value_max=90.0)
     Y = Y.numpy()
 
-    print(f"X shape: {X.shape}")
-    print(f"Y shape: {Y.shape}")
+    print(f"X shape: {X.shape}, dtype: {X.dtype}")
+    print(f"Y shape: {Y.shape}, dtype: {Y.dtype}")
+    print(f"Mixed precision enabled: {tf.keras.mixed_precision.global_policy().name}")
     
     # 1. Data splitting
     x_train, x_val, y_train, y_val = split_data(X, Y)
@@ -596,6 +602,7 @@ if __name__ == "__main__":
     print(f"{'='*60}")
     print(f"Training completed using {num_gpus} GPU(s)")
     print(f"Distribution strategy: {type(strategy).__name__}")
+    print(f"Mixed precision policy: {tf.keras.mixed_precision.global_policy().name}")
     print(f"Final Loss: {final_results[0]:.4f}")
     print(f"Final MAE: {final_results[1]:.4f}")
     print(f"Final MSE: {final_results[2]:.4f}")
