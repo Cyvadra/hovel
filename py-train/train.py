@@ -371,14 +371,14 @@ if __name__ == "__main__":
     model.summary()
     
     # 3. Model warmup training
-    warmup_history = warmup_training(model, x_train, y_train, x_val, y_val, warmup_epochs=15)
+    warmup_history = warmup_training(model, x_train, y_train, x_val, y_val, warmup_epochs=20)
     
     # 4. Progressive training
     print("\nStarting progressive training...")
     training_history = progressive_training(
         model, x_train, y_train, x_val, y_val,
-        batch_sizes=[64, 128, 256],
-        epochs_per_stage=80
+        batch_sizes=[64, 128, 32],
+        epochs_per_stage=300
     )
     
     # 5. Final evaluation
