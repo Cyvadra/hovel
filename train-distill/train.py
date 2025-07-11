@@ -374,6 +374,9 @@ def run_distillation(X_train_scaled, Y_train_scaled, X_val_scaled, Y_val_scaled,
     print("MODEL DISTILLATION")
     print("="*40)
     
+    print(f"Teacher model type: {type(teacher_model)}")
+    print(f"Student model type: {type(student_model)}")
+    
     # Get teacher predictions for distillation
     teacher_predictions = teacher_model.predict(X_train_scaled)
     
@@ -440,20 +443,38 @@ def load_pretrained_models():
         raise FileNotFoundError("Teacher model 'teacher_model.h5' not found!")
     
     teacher_model = keras.models.load_model('teacher_model.h5')
+    print(f"Teacher model loaded: {type(teacher_model)}")
 
     if os.path.exists('student_model.h5'):
         student_model = keras.models.load_model('student_model.h5')
+        print("Student model loaded from 'student_model.h5'")
     elif os.path.exists('student_model_distilled.h5'):
         student_model = keras.models.load_model('student_model_distilled.h5')
+        print("Student model loaded from 'student_model_distilled.h5'")
     else:
+        print("Building new student model...")
         # build new student model
-        student_model = StudentModel(
-            input_shape=(X_train_scaled.shape[1],), 
-            output_shape=Y_train_scaled.shape[1], 
+        student_builder = StudentModel(
+            input_shape=(teacher_model.input_shape[1],), 
+            output_shape=teacher_model.output_shape[1], 
             first_layer_width=16
         )
-        student_model.build_model()
-        student_model.compile_model(learning_rate=1e-4)
+        student_model = student_builder.build_model()
+        student_builder.compile_model(learning_rate=1e-4)
+        # Get the compiled model from the builder
+        student_model = student_builder.model
+        print("New student model built and compiled")
+    
+    print(f"Student model type: {type(student_model)}")
+    
+    # Test that the student model is callable
+    try:
+        test_input = np.random.randn(1, teacher_model.input_shape[1])
+        test_output = student_model(test_input)
+        print("Student model is callable ✓")
+    except Exception as e:
+        print(f"Error testing student model: {e}")
+        raise
     
     print("Models loaded successfully!")
     return teacher_model, student_model
