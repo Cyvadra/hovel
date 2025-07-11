@@ -14,7 +14,7 @@ if physical_devices:
     tf.config.experimental.set_memory_growth(physical_devices[0], True)
 
 def load_data():
-    """加载数据"""
+    """Load data"""
     with h5py.File('training_data.h5', 'r') as f:
         X = np.array(f['X'][:], dtype=np.float32)
         Y = np.array(f['Y'][:], dtype=np.float32)
@@ -24,32 +24,32 @@ def load_data():
     return X, Y
 
 def compare_activations():
-    """比较不同激活函数的性能"""
-    # 加载数据
+    """Compare different activation functions"""
+    # Load data
     X, Y = load_data()
-    print(f"数据形状: X {X.shape}, Y {Y.shape}")
+    print(f"Data shape: X {X.shape}, Y {Y.shape}")
     
-    # 数据切分
+    # Data splitting
     x_train, x_val, y_train, y_val = split_data(X, Y)
     
-    # 要测试的激活函数
-    activation_types = ['relu', 'elu', 'swish', 'gelu', 'mixed']
+    # Activation functions to test
+    activation_types = ['relu', 'elu', 'swish', 'gelu', 'softmax', 'mixed']
     results = {}
     
     for activation_type in activation_types:
         print(f"\n{'='*50}")
-        print(f"测试激活函数: {activation_type.upper()}")
+        print(f"Test Activation Function: {activation_type.upper()}")
         print(f"{'='*50}")
         
-        # 构建模型
+        # Build model
         model = build_model((x_train.shape[1],), y_train.shape[1], activation_type, optimizer_type='adamw')
         
-        # 模型预热训练
-        print(f"开始 {activation_type.upper()} 预热训练...")
+        # Warmup training
+        print(f"Starting {activation_type.upper()} Warmup Training...")
         warmup_history = warmup_training(model, x_train, y_train, x_val, y_val, warmup_epochs=10)
         
-        # 高级训练模型（使用余弦退火学习率调度）
-        print(f"开始 {activation_type.upper()} 主训练...")
+        # Advanced training model (using cosine annealing learning rate scheduler)
+        print(f"Starting {activation_type.upper()} Main Training...")
         history = train_model_advanced(
             model, x_train, y_train, x_val, y_val, 
             epochs=100, 
@@ -57,19 +57,19 @@ def compare_activations():
             lr_schedule='cosine'
         )
         
-        # 评估模型
+        # Evaluate model
         results[activation_type] = model.evaluate(x_val, y_val, verbose=0)
         
-        print(f"{activation_type.upper()} 结果:")
-        print(f"  损失: {results[activation_type][0]:.4f}")
+        print(f"{activation_type.upper()} Results:")
+        print(f"  Loss: {results[activation_type][0]:.4f}")
         print(f"  MAE: {results[activation_type][1]:.4f}")
         print(f"  MSE: {results[activation_type][2]:.4f}")
     
-    # 打印比较结果
+    # Print
     print(f"\n{'='*60}")
-    print("激活函数性能比较")
+    print("Activation Function Performance Comparison")
     print(f"{'='*60}")
-    print(f"{'激活函数':<12} {'损失':<10} {'MAE':<10} {'MSE':<10}")
+    print(f"{'Activation Function':<12} {'Loss':<10} {'MAE':<10} {'MSE':<10}")
     print("-" * 50)
     
     for activation_type in activation_types:
@@ -79,8 +79,8 @@ def compare_activations():
     return results, activation_types
 
 def plot_comparison(results, activation_types):
-    """绘制比较图表"""
-    metrics = ['损失', 'MAE', 'MSE']
+    """Plot comparison charts"""
+    metrics = ['Loss', 'MAE', 'MSE']
     metric_names = ['loss', 'mae', 'mse']
     
     fig, axes = plt.subplots(1, 3, figsize=(15, 5))
@@ -88,11 +88,11 @@ def plot_comparison(results, activation_types):
     for i, (metric, metric_name) in enumerate(zip(metrics, metric_names)):
         values = [results[act][i] for act in activation_types]
         axes[i].bar(activation_types, values, color=['#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#FFEAA7'])
-        axes[i].set_title(f'{metric} 比较')
+        axes[i].set_title(f'{metric} Comparison')
         axes[i].set_ylabel(metric)
         axes[i].tick_params(axis='x', rotation=45)
         
-        # 添加数值标签
+        # Add numerical labels
         for j, v in enumerate(values):
             axes[i].text(j, v + max(values) * 0.01, f'{v:.4f}', ha='center', va='bottom')
     
@@ -101,15 +101,15 @@ def plot_comparison(results, activation_types):
     plt.show()
 
 if __name__ == "__main__":
-    # 比较不同激活函数
+    # Compare different activation functions
     results, activation_types = compare_activations()
     
-    # 绘制比较图表
+    # Plot comparison charts
     plot_comparison(results, activation_types)
     
-    # 找出最佳激活函数
-    best_activation = min(results.keys(), key=lambda x: results[x][0])  # 按损失排序
-    print(f"\n最佳激活函数: {best_activation.upper()}")
-    print(f"最佳损失: {results[best_activation][0]:.4f}")
-    print(f"最佳MAE: {results[best_activation][1]:.4f}")
-    print(f"最佳MSE: {results[best_activation][2]:.4f}") 
+    # Find best activation function
+    best_activation = min(results.keys(), key=lambda x: results[x][0])  # Sort by loss
+    print(f"\nBest Activation Function: {best_activation.upper()}")
+    print(f"Best Loss: {results[best_activation][0]:.4f}")
+    print(f"Best MAE: {results[best_activation][1]:.4f}")
+    print(f"Best MSE: {results[best_activation
