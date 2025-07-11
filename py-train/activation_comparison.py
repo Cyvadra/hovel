@@ -20,6 +20,7 @@ def load_data():
         Y = np.array(f['Y'][:], dtype=np.float32)
     
     Y = tf.clip_by_value(Y, clip_value_min=-90.0, clip_value_max=90.0)
+    Y = Y.numpy()
     return X, Y
 
 def compare_activations():
