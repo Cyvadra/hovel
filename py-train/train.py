@@ -15,6 +15,117 @@ import matplotlib.pyplot as plt
 np.random.seed(42)
 tf.random.set_seed(42)
 
+# GPU Configuration function
+def configure_gpus():
+    """
+    Configure multiple GPUs for distributed training
+    Returns:
+        strategy: TensorFlow distribution strategy
+        num_gpus: Number of available GPUs
+    """
+    physical_devices = tf.config.list_physical_devices('GPU')
+    num_gpus = len(physical_devices)
+    
+    if num_gpus == 0:
+        print("No GPUs found. Using CPU.")
+        return tf.distribute.OneDeviceStrategy("/cpu:0"), 0
+    elif num_gpus == 1:
+        print(f"Using single GPU: {physical_devices[0]}")
+        # Enable memory growth for single GPU
+        tf.config.experimental.set_memory_growth(physical_devices[0], True)
+        return tf.distribute.OneDeviceStrategy("/gpu:0"), 1
+    else:
+        print(f"Found {num_gpus} GPUs. Configuring for distributed training.")
+        # Enable memory growth for all GPUs
+        for gpu in physical_devices:
+            tf.config.experimental.set_memory_growth(gpu, True)
+        
+        # Use MirroredStrategy for synchronous distributed training
+        strategy = tf.distribute.MirroredStrategy()
+        print(f"Using {strategy.num_replicas_in_sync} GPUs for distributed training")
+        return strategy, num_gpus
+
+def display_gpu_info():
+    """Display detailed GPU information"""
+    print("\n" + "="*60)
+    print("GPU Configuration Information")
+    print("="*60)
+    
+    # List all physical devices
+    physical_devices = tf.config.list_physical_devices()
+    print(f"Total physical devices: {len(physical_devices)}")
+    
+    # GPU devices
+    gpu_devices = tf.config.list_physical_devices('GPU')
+    print(f"GPU devices: {len(gpu_devices)}")
+    for i, gpu in enumerate(gpu_devices):
+        print(f"  GPU {i}: {gpu}")
+    
+    # CPU devices
+    cpu_devices = tf.config.list_physical_devices('CPU')
+    print(f"CPU devices: {len(cpu_devices)}")
+    for i, cpu in enumerate(cpu_devices):
+        print(f"  CPU {i}: {cpu}")
+    
+    # TensorFlow version
+    print(f"TensorFlow version: {tf.__version__}")
+    
+    # Check if GPU is available
+    print(f"GPU available: {tf.config.list_physical_devices('GPU')}")
+    print("="*60)
+
+def optimize_batch_sizes(num_gpus, base_batch_sizes):
+    """
+    Optimize batch sizes for multi-GPU training
+    Parameters:
+        num_gpus: Number of available GPUs
+        base_batch_sizes: List of base batch sizes for single GPU
+    Returns:
+        optimized_batch_sizes: List of optimized batch sizes for multi-GPU
+    """
+    if num_gpus <= 1:
+        return base_batch_sizes
+    
+    # Scale batch sizes by number of GPUs
+    scaled_batch_sizes = [bs * num_gpus for bs in base_batch_sizes]
+    
+    # Apply additional optimizations for multi-GPU
+    # For better memory utilization, we can increase batch sizes further
+    # but need to be careful about memory limits
+    optimized_batch_sizes = []
+    for bs in scaled_batch_sizes:
+        # For multi-GPU, we can often use larger batch sizes
+        # but cap at reasonable limits to avoid memory issues
+        if num_gpus >= 4:
+            optimized_bs = min(bs * 1.5, 512)  # Cap at 512 for very large setups
+        elif num_gpus >= 2:
+            optimized_bs = min(bs * 1.2, 256)  # Cap at 256 for medium setups
+        else:
+            optimized_bs = bs
+        
+        optimized_batch_sizes.append(int(optimized_bs))
+    
+    return optimized_batch_sizes
+
+def monitor_gpu_memory():
+    """Monitor GPU memory usage"""
+    try:
+        # Get GPU memory info
+        gpus = tf.config.experimental.list_physical_devices('GPU')
+        if gpus:
+            print("\nGPU Memory Information:")
+            for i, gpu in enumerate(gpus):
+                try:
+                    # Get memory info for each GPU
+                    memory_info = tf.config.experimental.get_memory_info(gpu.name)
+                    print(f"  GPU {i}: {gpu.name}")
+                    print(f"    Current memory: {memory_info['current'] / 1024**3:.2f} GB")
+                    print(f"    Peak memory: {memory_info['peak'] / 1024**3:.2f} GB")
+                except:
+                    print(f"  GPU {i}: {gpu.name} - Memory info not available")
+    except:
+        print("GPU memory monitoring not available")
+
 # 1. Data preparation and splitting
 def split_data(x, y, test_size=0.1, random_state=42):
     """
@@ -77,7 +188,7 @@ class ExponentialDecayWithWarmup:
         return lr
 
 # 3. Model building
-def build_model(input_shape, output_units, activation_type='mixed', optimizer_type='adamw'):
+def build_model(input_shape, output_units, activation_type='mixed', optimizer_type='adamw', strategy=None):
     """
     Build deep neural network model
     Parameters:
@@ -85,6 +196,7 @@ def build_model(input_shape, output_units, activation_type='mixed', optimizer_ty
         output_units: number of output units
         activation_type: activation function type ('relu', 'elu', 'swish', 'gelu', 'softmax', 'mixed')
         optimizer_type: optimizer type ('adam', 'adamw')
+        strategy: TensorFlow distribution strategy for multi-GPU training
     Returns:
         compiled model
     """
@@ -106,43 +218,84 @@ def build_model(input_shape, output_units, activation_type='mixed', optimizer_ty
         activations = ['relu'] * 5
     activations[4] = 'softmax'
     
-    # Build model
-    model = Sequential([
-        Dense(64, activation=activations[0], input_shape=input_shape,
-            kernel_regularizer=l2(0.01)),
-        BatchNormalization(),
-        Dropout(0.3),
-        
-        Dense(24, activation=activations[1], kernel_regularizer=l2(0.01)),
-        BatchNormalization(),
-        Dropout(0.3),
-        
-        Dense(12, activation=activations[2], kernel_regularizer=l2(0.01)),
-        BatchNormalization(),
-        Dropout(0.2),
-        
-        Dense(8, activation=activations[3], kernel_regularizer=l2(0.01)),
-        BatchNormalization(),
-        Dropout(0.1),
+    # Build model within distribution strategy scope
+    if strategy is not None:
+        with strategy.scope():
+            model = Sequential([
+                Dense(64, activation=activations[0], input_shape=input_shape,
+                    kernel_regularizer=l2(0.01)),
+                BatchNormalization(),
+                Dropout(0.3),
+                
+                Dense(24, activation=activations[1], kernel_regularizer=l2(0.01)),
+                BatchNormalization(),
+                Dropout(0.3),
+                
+                Dense(12, activation=activations[2], kernel_regularizer=l2(0.01)),
+                BatchNormalization(),
+                Dropout(0.2),
+                
+                Dense(8, activation=activations[3], kernel_regularizer=l2(0.01)),
+                BatchNormalization(),
+                Dropout(0.1),
 
-        Dense(output_units, activation=activations[4], kernel_regularizer=l2(0.01)),
-    ])
-    
-    # Choose optimizer
-    if optimizer_type == 'adamw':
-        optimizer = AdamW(learning_rate=1e-3, weight_decay=0.01)
+                Dense(output_units, activation=activations[4], kernel_regularizer=l2(0.01)),
+            ])
+            
+            # Choose optimizer
+            if optimizer_type == 'adamw':
+                optimizer = AdamW(learning_rate=1e-3, weight_decay=0.01)
+            else:
+                optimizer = Adam(learning_rate=1e-3)
+            
+            # Use Huber loss
+            huber_loss = Huber(delta=9.5)
+            
+            # Compile model
+            model.compile(
+                optimizer=optimizer,
+                loss=huber_loss,
+                metrics=['mae', 'mse']
+            )
     else:
-        optimizer = Adam(learning_rate=1e-3)
+        # Build model without distribution strategy
+        model = Sequential([
+            Dense(64, activation=activations[0], input_shape=input_shape,
+                kernel_regularizer=l2(0.01)),
+            BatchNormalization(),
+            Dropout(0.3),
+            
+            Dense(24, activation=activations[1], kernel_regularizer=l2(0.01)),
+            BatchNormalization(),
+            Dropout(0.3),
+            
+            Dense(12, activation=activations[2], kernel_regularizer=l2(0.01)),
+            BatchNormalization(),
+            Dropout(0.2),
+            
+            Dense(8, activation=activations[3], kernel_regularizer=l2(0.01)),
+            BatchNormalization(),
+            Dropout(0.1),
+
+            Dense(output_units, activation=activations[4], kernel_regularizer=l2(0.01)),
+        ])
+        
+        # Choose optimizer
+        if optimizer_type == 'adamw':
+            optimizer = AdamW(learning_rate=1e-3, weight_decay=0.01)
+        else:
+            optimizer = Adam(learning_rate=1e-3)
+        
+        # Use Huber loss
+        huber_loss = Huber(delta=9.5)
+        
+        # Compile model
+        model.compile(
+            optimizer=optimizer,
+            loss=huber_loss,
+            metrics=['mae', 'mse']
+        )
     
-    # Use Huber loss
-    huber_loss = Huber(delta=9.5)
-    
-    # Compile model
-    model.compile(
-        optimizer=optimizer,
-        loss=huber_loss,
-        metrics=['mae', 'mse']
-    )
     return model
 
 # 4. Advanced training process
@@ -311,7 +464,7 @@ def plot_training_history(history_list, title="Training History"):
     plt.show()
 
 # 8. Model warmup training
-def warmup_training(model, x_train, y_train, x_val, y_val, warmup_epochs=20):
+def warmup_training(model, x_train, y_train, x_val, y_val, warmup_epochs=20, batch_size=64):
     """
     Model warmup training: use smaller learning rate for initial training
     """
@@ -331,7 +484,7 @@ def warmup_training(model, x_train, y_train, x_val, y_val, warmup_epochs=20):
         x_train, y_train,
         validation_data=(x_val, y_val),
         epochs=warmup_epochs,
-        batch_size=64,
+        batch_size=batch_size,
         verbose=1,
         shuffle=True
     )
@@ -344,11 +497,14 @@ def warmup_training(model, x_train, y_train, x_val, y_val, warmup_epochs=20):
 
 # Main program
 if __name__ == "__main__":
-    # Ensure GPU usage
-    physical_devices = tf.config.list_physical_devices('GPU')
-    if physical_devices:
-        tf.config.experimental.set_memory_growth(physical_devices[0], True)
-        print(f"Using GPU: {physical_devices[0]}")
+    # Configure GPUs
+    strategy, num_gpus = configure_gpus()
+    
+    # Display GPU information
+    display_gpu_info()
+    
+    # Monitor GPU memory
+    monitor_gpu_memory()
     
     # Load data
     import h5py
@@ -365,19 +521,27 @@ if __name__ == "__main__":
     # 1. Data splitting
     x_train, x_val, y_train, y_val = split_data(X, Y)
     
-    # 2. Build model (using AdamW optimizer)
-    model = build_model((x_train.shape[1],), y_train.shape[1], optimizer_type='adamw')
+    # 2. Build model (using AdamW optimizer with distribution strategy)
+    model = build_model((x_train.shape[1],), y_train.shape[1], optimizer_type='adamw', strategy=strategy)
     print("\nModel Architecture Summary:")
     model.summary()
     
     # 3. Model warmup training
-    warmup_history = warmup_training(model, x_train, y_train, x_val, y_val, warmup_epochs=20)
+    # Optimize warmup batch size for multi-GPU training
+    warmup_batch_size = optimize_batch_sizes(num_gpus, [64])[0]
+    print(f"Optimized warmup batch size: {warmup_batch_size}")
+    warmup_history = warmup_training(model, x_train, y_train, x_val, y_val, warmup_epochs=20, batch_size=warmup_batch_size)
     
     # 4. Progressive training
     print("\nStarting progressive training...")
+    # Optimize batch sizes for multi-GPU training
+    base_batch_sizes = [64, 128, 32]
+    batch_sizes = optimize_batch_sizes(num_gpus, base_batch_sizes)
+    print(f"Optimized batch sizes for {num_gpus} GPU(s): {batch_sizes}")
+    
     training_history = progressive_training(
         model, x_train, y_train, x_val, y_val,
-        batch_sizes=[64, 128, 32],
+        batch_sizes=batch_sizes,
         epochs_per_stage=300
     )
     
@@ -396,6 +560,14 @@ if __name__ == "__main__":
     print(f"\n{'='*60}")
     print("Final Training Results")
     print(f"{'='*60}")
+    print(f"Training completed using {num_gpus} GPU(s)")
+    print(f"Distribution strategy: {type(strategy).__name__}")
     print(f"Final Loss: {final_results[0]:.4f}")
     print(f"Final MAE: {final_results[1]:.4f}")
     print(f"Final MSE: {final_results[2]:.4f}")
+    
+    # Final GPU memory check
+    print(f"\n{'='*60}")
+    print("Final GPU Memory Status")
+    print(f"{'='*60}")
+    monitor_gpu_memory()
