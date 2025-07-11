@@ -104,15 +104,16 @@ def build_model(input_shape, output_units, activation_type='mixed', optimizer_ty
         activations = ['swish', 'elu', 'gelu', 'relu', 'softmax']
     else:
         activations = ['relu'] * 5
+    activations[4] = 'softmax'
     
     # Build model
     model = Sequential([
-        Dense(256, activation=activations[0], input_shape=input_shape,
+        Dense(366, activation=activations[0], input_shape=input_shape,
             kernel_regularizer=l2(0.01)),
         BatchNormalization(),
         Dropout(0.3),
         
-        Dense(128, activation=activations[1], kernel_regularizer=l2(0.01)),
+        Dense(64, activation=activations[1], kernel_regularizer=l2(0.01)),
         BatchNormalization(),
         Dropout(0.3),
         
@@ -120,7 +121,7 @@ def build_model(input_shape, output_units, activation_type='mixed', optimizer_ty
         BatchNormalization(),
         Dropout(0.2),
         
-        Dense(64, activation=activations[3], kernel_regularizer=l2(0.01)),
+        Dense(15, activation=activations[3], kernel_regularizer=l2(0.01)),
         BatchNormalization(),
         Dropout(0.1),
 

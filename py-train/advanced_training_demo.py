@@ -15,10 +15,10 @@ tf.random.set_seed(42)
 physical_devices = tf.config.list_physical_devices('GPU')
 if physical_devices:
     tf.config.experimental.set_memory_growth(physical_devices[0], True)
-    print(f"使用GPU: {physical_devices[0]}")
+    print(f"Using GPU: {physical_devices[0]}")
 
 def load_data():
-    """加载数据"""
+    """Load data"""
     with h5py.File('training_data.h5', 'r') as f:
         X = np.array(f['X'][:], dtype=np.float32)
         Y = np.array(f['Y'][:], dtype=np.float32)
@@ -28,34 +28,34 @@ def load_data():
     return X, Y
 
 def demo_different_training_strategies():
-    """演示不同的训练策略"""
+    """Demonstrate different training strategies"""
     
-    # 加载数据
+    # Load data
     X, Y = load_data()
-    print(f"数据形状: X {X.shape}, Y {Y.shape}")
+    print(f"Data shape: X {X.shape}, Y {Y.shape}")
     
-    # 数据切分
+    # Data splitting
     x_train, x_val, y_train, y_val = split_data(X, Y)
     
     strategies = {
-        'cosine_annealing': '余弦退火学习率调度',
-        'exponential_decay': '指数衰减学习率调度',
-        'plateau_reduction': '平台学习率衰减',
-        'progressive_training': '渐进式训练'
+        'cosine_annealing': 'Cosine Annealing Learning Rate Scheduler',
+        'exponential_decay': 'Exponential Decay Learning Rate Scheduler',
+        'plateau_reduction': 'Plateau Learning Rate Reduction',
+        'progressive_training': 'Progressive Training'
     }
     
     results = {}
     
     for strategy_name, strategy_desc in strategies.items():
         print(f"\n{'='*60}")
-        print(f"测试策略: {strategy_desc}")
+        print(f"Test Strategy: {strategy_desc}")
         print(f"{'='*60}")
         
-        # 构建模型
+        # Build model
         model = build_model((x_train.shape[1],), y_train.shape[1], optimizer_type='adamw')
         
         if strategy_name == 'progressive_training':
-            # 渐进式训练
+            # Progressive training
             warmup_history = warmup_training(model, x_train, y_train, x_val, y_val, warmup_epochs=10)
             training_history = progressive_training(
                 model, x_train, y_train, x_val, y_val,
@@ -64,7 +64,7 @@ def demo_different_training_strategies():
             )
             all_history = [warmup_history] + training_history
         else:
-            # 其他策略使用高级训练
+            # Other strategies use advanced training
             warmup_history = warmup_training(model, x_train, y_train, x_val, y_val, warmup_epochs=10)
             training_history = train_model_advanced(
                 model, x_train, y_train, x_val, y_val,
@@ -74,7 +74,7 @@ def demo_different_training_strategies():
             )
             all_history = [warmup_history, training_history]
         
-        # 评估模型
+        # Evaluate model
         final_results = evaluate_model(model, x_val, y_val)
         results[strategy_name] = {
             'results': final_results,
@@ -82,33 +82,33 @@ def demo_different_training_strategies():
             'description': strategy_desc
         }
         
-        # 保存模型
+        # Save model
         model.save(f'model_{strategy_name}.h5')
-        print(f"模型已保存为 'model_{strategy_name}.h5'")
+        print(f"Model saved as 'model_{strategy_name}.h5'")
     
     return results
 
 def compare_strategies(results):
-    """比较不同训练策略的性能"""
+    """Compare different training strategies"""
     print(f"\n{'='*80}")
-    print("训练策略性能比较")
+    print("Training Strategy Performance Comparison")
     print(f"{'='*80}")
-    print(f"{'策略':<20} {'损失':<10} {'MAE':<10} {'MSE':<10}")
+    print(f"{'Strategy':<20} {'Loss':<10} {'MAE':<10} {'MSE':<10}")
     print("-" * 60)
     
     for strategy_name, data in results.items():
         loss, mae, mse = data['results']
         print(f"{data['description']:<20} {loss:<10.4f} {mae:<10.4f} {mse:<10.4f}")
     
-    # 找出最佳策略
+    # Find best strategy
     best_strategy = min(results.keys(), key=lambda x: results[x]['results'][0])
-    print(f"\n最佳训练策略: {results[best_strategy]['description']}")
-    print(f"最佳损失: {results[best_strategy]['results'][0]:.4f}")
-    print(f"最佳MAE: {results[best_strategy]['results'][1]:.4f}")
-    print(f"最佳MSE: {results[best_strategy]['results'][2]:.4f}")
+    print(f"\nBest Training Strategy: {results[best_strategy]['description']}")
+    print(f"Best Loss: {results[best_strategy]['results'][0]:.4f}")
+    print(f"Best MAE: {results[best_strategy]['results'][1]:.4f}")
+    print(f"Best MSE: {results[best_strategy]['results'][2]:.4f}")
 
 def plot_strategy_comparison(results):
-    """绘制策略比较图表"""
+    """Plot strategy comparison charts"""
     strategies = list(results.keys())
     descriptions = [results[s]['description'] for s in strategies]
     losses = [results[s]['results'][0] for s in strategies]
@@ -117,23 +117,23 @@ def plot_strategy_comparison(results):
     
     fig, axes = plt.subplots(1, 3, figsize=(18, 6))
     
-    # 损失比较
+    # Loss comparison
     axes[0].bar(descriptions, losses, color=['#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4'])
-    axes[0].set_title('损失比较')
-    axes[0].set_ylabel('损失')
+    axes[0].set_title('Loss Comparison')
+    axes[0].set_ylabel('Loss')
     axes[0].tick_params(axis='x', rotation=45)
     axes[0].grid(True, alpha=0.3)
     
-    # MAE比较
+    # MAE comparison
     axes[1].bar(descriptions, maes, color=['#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4'])
-    axes[1].set_title('MAE比较')
+    axes[1].set_title('MAE Comparison')
     axes[1].set_ylabel('MAE')
     axes[1].tick_params(axis='x', rotation=45)
     axes[1].grid(True, alpha=0.3)
     
-    # MSE比较
+    # MSE comparison
     axes[2].bar(descriptions, mses, color=['#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4'])
-    axes[2].set_title('MSE比较')
+    axes[2].set_title('MSE Comparison')
     axes[2].set_ylabel('MSE')
     axes[2].tick_params(axis='x', rotation=45)
     axes[2].grid(True, alpha=0.3)
@@ -143,29 +143,29 @@ def plot_strategy_comparison(results):
     plt.show()
 
 def demo_learning_rate_schedules():
-    """演示不同学习率调度器的效果"""
+    """Demonstrate different learning rate schedulers"""
     print(f"\n{'='*60}")
-    print("学习率调度器演示")
+    print("Learning Rate Scheduler Demonstration")
     print(f"{'='*60}")
     
     from train import WarmUpCosineDecay, ExponentialDecayWithWarmup
     
-    # 创建调度器
+    # Create schedulers
     cosine_scheduler = WarmUpCosineDecay(initial_lr=1e-3, warmup_epochs=10, total_epochs=100)
     exp_scheduler = ExponentialDecayWithWarmup(initial_lr=1e-3, warmup_epochs=5)
     
-    # 计算学习率变化
+    # Calculate learning rate changes
     epochs = range(100)
     cosine_lrs = [cosine_scheduler(epoch) for epoch in epochs]
     exp_lrs = [exp_scheduler(epoch) for epoch in epochs]
     
-    # 绘制学习率变化
+    # Plot learning rate changes
     plt.figure(figsize=(12, 6))
-    plt.plot(epochs, cosine_lrs, label='余弦退火', linewidth=2)
-    plt.plot(epochs, exp_lrs, label='指数衰减', linewidth=2)
+    plt.plot(epochs, cosine_lrs, label='Cosine Annealing', linewidth=2)
+    plt.plot(epochs, exp_lrs, label='Exponential Decay', linewidth=2)
     plt.xlabel('Epoch')
-    plt.ylabel('学习率')
-    plt.title('不同学习率调度器的比较')
+    plt.ylabel('Learning Rate')
+    plt.title('Comparison of Different Learning Rate Schedulers')
     plt.legend()
     plt.grid(True, alpha=0.3)
     plt.yscale('log')
@@ -173,19 +173,19 @@ def demo_learning_rate_schedules():
     plt.show()
 
 if __name__ == "__main__":
-    # 演示学习率调度器
+    # Demonstrate learning rate schedulers
     demo_learning_rate_schedules()
     
-    # 演示不同训练策略
+    # Demonstrate different training strategies
     results = demo_different_training_strategies()
     
-    # 比较策略性能
+    # Compare strategy performance
     compare_strategies(results)
     
-    # 绘制策略比较图表
+    # Plot strategy comparison charts
     plot_strategy_comparison(results)
     
-    # 为最佳策略绘制详细训练历史
+    # Plot detailed training history for best strategy
     best_strategy = min(results.keys(), key=lambda x: results[x]['results'][0])
-    print(f"\n绘制最佳策略 '{results[best_strategy]['description']}' 的详细训练历史...")
-    plot_training_history(results[best_strategy]['history'], f"最佳策略: {results[best_strategy]['description']}") 
+    print(f"\nPlotting detailed training history for best strategy '{results[best_strategy]['description']}'...")
+    plot_training_history(results[best_strategy]['history'], f"Best Strategy: {results[best_strategy]['description']}") 
