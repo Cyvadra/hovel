@@ -512,6 +512,13 @@ if __name__ == "__main__":
         X = np.array(f['X'][:], dtype=np.float32)
         Y = np.array(f['Y'][:], dtype=np.float32)
 
+    # Auto transpose data to have samples as first dimension
+    # X: (366, 17108) -> (17108, 366)
+    # Y: (5, 17108) -> (17108, 5)
+    if X.shape[0] != Y.shape[0]:
+        X = X.T
+        Y = Y.T
+
     Y = tf.clip_by_value(Y, clip_value_min=-90.0, clip_value_max=90.0)
     Y = Y.numpy()
 
