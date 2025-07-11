@@ -1,5 +1,6 @@
 import numpy as np
 import tensorflow as tf
+import os
 from tensorflow.keras.callbacks import ReduceLROnPlateau, LearningRateScheduler, ModelCheckpoint
 from tensorflow.keras.layers import Dense, BatchNormalization, Dropout
 from tensorflow.keras.models import Sequential
@@ -23,27 +24,39 @@ def configure_gpus():
         strategy: TensorFlow distribution strategy
         num_gpus: Number of available GPUs
     """
-    physical_devices = tf.config.list_physical_devices('GPU')
-    num_gpus = len(physical_devices)
-    
-    if num_gpus == 0:
-        print("No GPUs found. Using CPU.")
-        return tf.distribute.OneDeviceStrategy("/cpu:0"), 0
-    elif num_gpus == 1:
-        print(f"Using single GPU: {physical_devices[0]}")
-        # Enable memory growth for single GPU
-        tf.config.experimental.set_memory_growth(physical_devices[0], True)
-        return tf.distribute.OneDeviceStrategy("/gpu:0"), 1
-    else:
-        print(f"Found {num_gpus} GPUs. Configuring for distributed training.")
-        # Enable memory growth for all GPUs
-        for gpu in physical_devices:
-            tf.config.experimental.set_memory_growth(gpu, True)
+    try:
+        # Try to configure GPU memory growth first
+        physical_devices = tf.config.list_physical_devices('GPU')
+        num_gpus = len(physical_devices)
         
-        # Use MirroredStrategy for synchronous distributed training
-        strategy = tf.distribute.MirroredStrategy()
-        print(f"Using {strategy.num_replicas_in_sync} GPUs for distributed training")
-        return strategy, num_gpus
+        if num_gpus == 0:
+            print("No GPUs found. Using CPU.")
+            return tf.distribute.OneDeviceStrategy("/cpu:0"), 0
+        elif num_gpus == 1:
+            print(f"Using single GPU: {physical_devices[0]}")
+            # Enable memory growth for single GPU
+            try:
+                tf.config.experimental.set_memory_growth(physical_devices[0], True)
+            except:
+                print("Warning: Could not set memory growth for GPU")
+            return tf.distribute.OneDeviceStrategy("/gpu:0"), 1
+        else:
+            print(f"Found {num_gpus} GPUs. Configuring for distributed training.")
+            # Enable memory growth for all GPUs
+            for gpu in physical_devices:
+                try:
+                    tf.config.experimental.set_memory_growth(gpu, True)
+                except:
+                    print(f"Warning: Could not set memory growth for {gpu}")
+            
+            # Use MirroredStrategy for synchronous distributed training
+            strategy = tf.distribute.MirroredStrategy()
+            print(f"Using {strategy.num_replicas_in_sync} GPUs for distributed training")
+            return strategy, num_gpus
+    except Exception as e:
+        print(f"GPU configuration failed: {e}")
+        print("Falling back to CPU training")
+        return tf.distribute.OneDeviceStrategy("/cpu:0"), 0
 
 def display_gpu_info():
     """Display detailed GPU information"""
@@ -497,8 +510,22 @@ def warmup_training(model, x_train, y_train, x_val, y_val, warmup_epochs=20, bat
 
 # Main program
 if __name__ == "__main__":
-    # Configure GPUs
-    strategy, num_gpus = configure_gpus()
+    # Check if CPU training is forced
+    force_cpu = os.environ.get('FORCE_CPU', 'false').lower() == 'true'
+    
+    if force_cpu:
+        print("CPU training forced by environment variable")
+        strategy = tf.distribute.OneDeviceStrategy("/cpu:0")
+        num_gpus = 0
+    else:
+        # Configure GPUs with fallback to CPU if needed
+        try:
+            strategy, num_gpus = configure_gpus()
+        except Exception as e:
+            print(f"GPU configuration failed: {e}")
+            print("Forcing CPU training")
+            strategy = tf.distribute.OneDeviceStrategy("/cpu:0")
+            num_gpus = 0
     
     # Display GPU information
     display_gpu_info()
