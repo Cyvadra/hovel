@@ -108,20 +108,20 @@ def build_model(input_shape, output_units, activation_type='mixed', optimizer_ty
     
     # Build model
     model = Sequential([
-        Dense(366, activation=activations[0], input_shape=input_shape,
+        Dense(64, activation=activations[0], input_shape=input_shape,
             kernel_regularizer=l2(0.01)),
         BatchNormalization(),
         Dropout(0.3),
         
-        Dense(64, activation=activations[1], kernel_regularizer=l2(0.01)),
+        Dense(24, activation=activations[1], kernel_regularizer=l2(0.01)),
         BatchNormalization(),
         Dropout(0.3),
         
-        Dense(64, activation=activations[2], kernel_regularizer=l2(0.01)),
+        Dense(12, activation=activations[2], kernel_regularizer=l2(0.01)),
         BatchNormalization(),
         Dropout(0.2),
         
-        Dense(15, activation=activations[3], kernel_regularizer=l2(0.01)),
+        Dense(8, activation=activations[3], kernel_regularizer=l2(0.01)),
         BatchNormalization(),
         Dropout(0.1),
 
