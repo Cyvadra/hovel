@@ -11,20 +11,20 @@ from sklearn.model_selection import train_test_split
 import math
 import matplotlib.pyplot as plt
 
-# 设置随机种子保证可重复性
+# Set random seed for reproducibility
 np.random.seed(42)
 tf.random.set_seed(42)
 
-# 1. 数据准备和切分
+# 1. Data preparation and splitting
 def split_data(x, y, test_size=0.1, random_state=42):
     """
-    随机切分数据集为训练集和验证集
-    参数:
-        x: 特征数据 (17108, 366)
-        y: 标签数据 (17108, 5)
-        test_size: 验证集比例 (默认10%)
-        random_state: 随机种子
-    返回:
+    Randomly split dataset into training and validation sets
+    Parameters:
+        x: feature data (17108, 366)
+        y: label data (17108, 5)
+        test_size: validation set ratio (default 10%)
+        random_state: random seed
+    Returns:
         X_train, x_val, y_train, y_val
     """
     x_train, x_val, y_train, y_val = train_test_split(
@@ -32,13 +32,13 @@ def split_data(x, y, test_size=0.1, random_state=42):
         test_size=test_size, 
         random_state=random_state
     )
-    print(f"训练集形状: x_train {x_train.shape}, y_train {y_train.shape}")
-    print(f"验证集形状: x_val {x_val.shape}, y_val {y_val.shape}")
+    print(f"Training set shape: x_train {x_train.shape}, y_train {y_train.shape}")
+    print(f"Validation set shape: x_val {x_val.shape}, y_val {y_val.shape}")
     return x_train, x_val, y_train, y_val
 
-# 2. 动态学习率调度器
+# 2. Dynamic learning rate scheduler
 class WarmUpCosineDecay:
-    """余弦退火学习率调度器，包含预热阶段"""
+    """Cosine annealing learning rate scheduler with warmup phase"""
     
     def __init__(self, initial_lr=1e-4, warmup_epochs=10, total_epochs=500, min_lr=1e-7):
         self.initial_lr = initial_lr
@@ -48,17 +48,17 @@ class WarmUpCosineDecay:
     
     def __call__(self, epoch):
         if epoch < self.warmup_epochs:
-            # 预热阶段：线性增长
+            # Warmup phase: linear growth
             lr = self.initial_lr * (epoch + 1) / self.warmup_epochs
         else:
-            # 余弦退火阶段
+            # Cosine annealing phase
             progress = (epoch - self.warmup_epochs) / (self.total_epochs - self.warmup_epochs)
             lr = self.min_lr + (self.initial_lr - self.min_lr) * 0.5 * (1 + math.cos(math.pi * progress))
         
         return lr
 
 class ExponentialDecayWithWarmup:
-    """指数衰减学习率调度器，包含预热阶段"""
+    """Exponential decay learning rate scheduler with warmup phase"""
     
     def __init__(self, initial_lr=1e-3, warmup_epochs=5, decay_rate=0.95, min_lr=1e-7):
         self.initial_lr = initial_lr
@@ -68,25 +68,25 @@ class ExponentialDecayWithWarmup:
     
     def __call__(self, epoch):
         if epoch < self.warmup_epochs:
-            # 预热阶段：线性增长
+            # Warmup phase: linear growth
             lr = self.initial_lr * (epoch + 1) / self.warmup_epochs
         else:
-            # 指数衰减阶段
+            # Exponential decay phase
             lr = max(self.initial_lr * (self.decay_rate ** (epoch - self.warmup_epochs)), self.min_lr)
         
         return lr
 
-# 3. 模型构建
+# 3. Model building
 def build_model(input_shape, output_units, activation_type='mixed', optimizer_type='adamw'):
     """
-    构建深层神经网络模型
-    参数:
-        input_shape: 输入特征维度
-        output_units: 输出单元数
-        activation_type: 激活函数类型 ('relu', 'elu', 'swish', 'gelu', 'softmax', 'mixed')
-        optimizer_type: 优化器类型 ('adam', 'adamw')
-    返回:
-        编译好的模型
+    Build deep neural network model
+    Parameters:
+        input_shape: input feature dimensions
+        output_units: number of output units
+        activation_type: activation function type ('relu', 'elu', 'swish', 'gelu', 'softmax', 'mixed')
+        optimizer_type: optimizer type ('adam', 'adamw')
+    Returns:
+        compiled model
     """
     
     if activation_type == 'relu':
@@ -100,12 +100,12 @@ def build_model(input_shape, output_units, activation_type='mixed', optimizer_ty
     elif activation_type == 'softmax':
         activations = ['softmax'] * 5
     elif activation_type == 'mixed':
-        # 混合激活函数：不同层使用不同的激活函数
+        # Mixed activation functions: different layers use different activation functions
         activations = ['swish', 'elu', 'gelu', 'relu', 'softmax']
     else:
         activations = ['relu'] * 5
     
-    # 构建模型
+    # Build model
     model = Sequential([
         Dense(256, activation=activations[0], input_shape=input_shape,
             kernel_regularizer=l2(0.01)),
@@ -127,16 +127,16 @@ def build_model(input_shape, output_units, activation_type='mixed', optimizer_ty
         Dense(output_units, activation=activations[4], kernel_regularizer=l2(0.01)),
     ])
     
-    # 选择优化器
+    # Choose optimizer
     if optimizer_type == 'adamw':
         optimizer = AdamW(learning_rate=1e-3, weight_decay=0.01)
     else:
         optimizer = Adam(learning_rate=1e-3)
     
-    # 使用Huber损失
+    # Use Huber loss
     huber_loss = Huber(delta=9.5)
     
-    # 编译模型
+    # Compile model
     model.compile(
         optimizer=optimizer,
         loss=huber_loss,
@@ -144,23 +144,23 @@ def build_model(input_shape, output_units, activation_type='mixed', optimizer_ty
     )
     return model
 
-# 4. 高级训练过程
+# 4. Advanced training process
 def train_model_advanced(model, x_train, y_train, x_val, y_val, 
                         epochs=500, batch_size=128, lr_schedule='cosine'):
     """
-    高级训练模型，包含动态学习率调度和预热
-    参数:
-        model: 编译好的模型
-        x_train, y_train: 训练数据
-        x_val, y_val: 验证数据
-        epochs: 训练轮次
-        batch_size: 批量大小
-        lr_schedule: 学习率调度类型 ('cosine', 'exponential', 'plateau')
-    返回:
-        history: 训练历史对象
+    Advanced model training with dynamic learning rate scheduling and warmup
+    Parameters:
+        model: compiled model
+        x_train, y_train: training data
+        x_val, y_val: validation data
+        epochs: number of training epochs
+        batch_size: batch size
+        lr_schedule: learning rate schedule type ('cosine', 'exponential', 'plateau')
+    Returns:
+        history: training history object
     """
     
-    # 设置学习率调度器
+    # Set learning rate scheduler
     if lr_schedule == 'cosine':
         lr_scheduler = WarmUpCosineDecay(initial_lr=1e-3, warmup_epochs=10, total_epochs=epochs)
         lr_callback = LearningRateScheduler(lr_scheduler, verbose=1)
@@ -176,7 +176,7 @@ def train_model_advanced(model, x_train, y_train, x_val, y_val,
             verbose=1
         )
     
-    # 回调函数设置
+    # Callback settings
     callbacks = [
         lr_callback,
         ModelCheckpoint(
@@ -195,16 +195,16 @@ def train_model_advanced(model, x_train, y_train, x_val, y_val,
         tf.keras.callbacks.ReduceLROnPlateau(
             monitor='val_loss',
             factor=0.2,
-            patience=8,
+            patience=15,
             min_lr=1e-7,
             verbose=1
         ) if lr_schedule != 'plateau' else None
     ]
     
-    # 移除None值
+    # Remove None values
     callbacks = [cb for cb in callbacks if cb is not None]
     
-    # 训练模型
+    # Train model
     history = model.fit(
         x_train, y_train,
         validation_data=(x_val, y_val),
@@ -216,25 +216,25 @@ def train_model_advanced(model, x_train, y_train, x_val, y_val,
     )
     return history
 
-# 5. 渐进式训练
+# 5. Progressive training
 def progressive_training(model, x_train, y_train, x_val, y_val, 
                         batch_sizes=[64, 128, 256], epochs_per_stage=100):
     """
-    渐进式训练：从小批量开始，逐步增加批量大小
+    Progressive training: start with small batch size and gradually increase
     """
     history_list = []
     
     for i, batch_size in enumerate(batch_sizes):
         print(f"\n{'='*50}")
-        print(f"训练阶段 {i+1}/{len(batch_sizes)}: 批量大小 = {batch_size}")
+        print(f"Training Stage {i+1}/{len(batch_sizes)}: Batch Size = {batch_size}")
         print(f"{'='*50}")
         
-        # 调整学习率
+        # Adjust learning rate
         current_lr = model.optimizer.learning_rate.numpy()
-        new_lr = current_lr * (0.8 ** i)  # 每个阶段降低学习率
+        new_lr = current_lr * (0.8 ** i)  # Reduce learning rate each stage
         tf.keras.backend.set_value(model.optimizer.learning_rate, new_lr)
         
-        # 训练当前阶段
+        # Train current stage
         history = train_model_advanced(
             model, x_train, y_train, x_val, y_val,
             epochs=epochs_per_stage,
@@ -245,63 +245,63 @@ def progressive_training(model, x_train, y_train, x_val, y_val,
     
     return history_list
 
-# 6. 评估函数
+# 6. Evaluation function
 def evaluate_model(model, x_val, y_val):
     """
-    评估模型性能
-    参数:
-        model: 训练好的模型
-        x_val, y_val: 验证数据
+    Evaluate model performance
+    Parameters:
+        model: trained model
+        x_val, y_val: validation data
     """
-    print("\n模型评估:")
+    print("\nModel Evaluation:")
     results = model.evaluate(x_val, y_val, verbose=0)
-    print(f"验证集损失(Huber): {results[0]:.4f}")
-    print(f"验证集MAE: {results[1]:.4f}")
-    print(f"验证集MSE: {results[2]:.4f}")
+    print(f"Validation Loss (Huber): {results[0]:.4f}")
+    print(f"Validation MAE: {results[1]:.4f}")
+    print(f"Validation MSE: {results[2]:.4f}")
     return results
 
-# 7. 可视化训练过程
-def plot_training_history(history_list, title="训练历史"):
-    """绘制训练历史图表"""
+# 7. Visualize training process
+def plot_training_history(history_list, title="Training History"):
+    """Plot training history charts"""
     if not isinstance(history_list, list):
         history_list = [history_list]
     
     fig, axes = plt.subplots(2, 2, figsize=(15, 10))
     
     for i, history in enumerate(history_list):
-        # 损失曲线
-        axes[0, 0].plot(history.history['loss'], label=f'训练损失 (阶段{i+1})', alpha=0.7)
-        axes[0, 0].plot(history.history['val_loss'], label=f'验证损失 (阶段{i+1})', alpha=0.7)
-        axes[0, 0].set_title('损失曲线')
+        # Loss curve
+        axes[0, 0].plot(history.history['loss'], label=f'Training Loss (Stage {i+1})', alpha=0.7)
+        axes[0, 0].plot(history.history['val_loss'], label=f'Validation Loss (Stage {i+1})', alpha=0.7)
+        axes[0, 0].set_title('Loss Curve')
         axes[0, 0].set_xlabel('Epoch')
-        axes[0, 0].set_ylabel('损失')
+        axes[0, 0].set_ylabel('Loss')
         axes[0, 0].legend()
         axes[0, 0].grid(True)
         
-        # MAE曲线
-        axes[0, 1].plot(history.history['mae'], label=f'训练MAE (阶段{i+1})', alpha=0.7)
-        axes[0, 1].plot(history.history['val_mae'], label=f'验证MAE (阶段{i+1})', alpha=0.7)
-        axes[0, 1].set_title('MAE曲线')
+        # MAE curve
+        axes[0, 1].plot(history.history['mae'], label=f'Training MAE (Stage {i+1})', alpha=0.7)
+        axes[0, 1].plot(history.history['val_mae'], label=f'Validation MAE (Stage {i+1})', alpha=0.7)
+        axes[0, 1].set_title('MAE Curve')
         axes[0, 1].set_xlabel('Epoch')
         axes[0, 1].set_ylabel('MAE')
         axes[0, 1].legend()
         axes[0, 1].grid(True)
         
-        # MSE曲线
-        axes[1, 0].plot(history.history['mse'], label=f'训练MSE (阶段{i+1})', alpha=0.7)
-        axes[1, 0].plot(history.history['val_mse'], label=f'验证MSE (阶段{i+1})', alpha=0.7)
-        axes[1, 0].set_title('MSE曲线')
+        # MSE curve
+        axes[1, 0].plot(history.history['mse'], label=f'Training MSE (Stage {i+1})', alpha=0.7)
+        axes[1, 0].plot(history.history['val_mse'], label=f'Validation MSE (Stage {i+1})', alpha=0.7)
+        axes[1, 0].set_title('MSE Curve')
         axes[1, 0].set_xlabel('Epoch')
         axes[1, 0].set_ylabel('MSE')
         axes[1, 0].legend()
         axes[1, 0].grid(True)
         
-        # 学习率曲线（如果有的话）
+        # Learning rate curve (if available)
         if 'lr' in history.history:
-            axes[1, 1].plot(history.history['lr'], label=f'学习率 (阶段{i+1})', alpha=0.7)
-            axes[1, 1].set_title('学习率变化')
+            axes[1, 1].plot(history.history['lr'], label=f'Learning Rate (Stage {i+1})', alpha=0.7)
+            axes[1, 1].set_title('Learning Rate Change')
             axes[1, 1].set_xlabel('Epoch')
-            axes[1, 1].set_ylabel('学习率')
+            axes[1, 1].set_ylabel('Learning Rate')
             axes[1, 1].legend()
             axes[1, 1].grid(True)
     
@@ -309,23 +309,23 @@ def plot_training_history(history_list, title="训练历史"):
     plt.savefig('training_history.png', dpi=300, bbox_inches='tight')
     plt.show()
 
-# 8. 模型预热训练
+# 8. Model warmup training
 def warmup_training(model, x_train, y_train, x_val, y_val, warmup_epochs=20):
     """
-    模型预热训练：使用较小的学习率进行初始训练
+    Model warmup training: use smaller learning rate for initial training
     """
     print(f"\n{'='*50}")
-    print("开始模型预热训练")
+    print("Starting Model Warmup Training")
     print(f"{'='*50}")
     
-    # 保存原始学习率
+    # Save original learning rate
     original_lr = model.optimizer.learning_rate.numpy()
     
-    # 设置预热学习率（较小的学习率）
+    # Set warmup learning rate (smaller learning rate)
     warmup_lr = original_lr * 0.1
     tf.keras.backend.set_value(model.optimizer.learning_rate, warmup_lr)
     
-    # 预热训练
+    # Warmup training
     warmup_history = model.fit(
         x_train, y_train,
         validation_data=(x_val, y_val),
@@ -335,21 +335,21 @@ def warmup_training(model, x_train, y_train, x_val, y_val, warmup_epochs=20):
         shuffle=True
     )
     
-    # 恢复原始学习率
+    # Restore original learning rate
     tf.keras.backend.set_value(model.optimizer.learning_rate, original_lr)
     
-    print(f"预热训练完成，恢复学习率: {original_lr}")
+    print(f"Warmup training completed, restored learning rate: {original_lr}")
     return warmup_history
 
-# 主程序
+# Main program
 if __name__ == "__main__":
-    # 确保使用 GPU
+    # Ensure GPU usage
     physical_devices = tf.config.list_physical_devices('GPU')
     if physical_devices:
         tf.config.experimental.set_memory_growth(physical_devices[0], True)
-        print(f"使用GPU: {physical_devices[0]}")
+        print(f"Using GPU: {physical_devices[0]}")
     
-    # 加载数据
+    # Load data
     import h5py
     with h5py.File('training_data.h5', 'r') as f:
         X = np.array(f['X'][:], dtype=np.float32)
@@ -361,40 +361,40 @@ if __name__ == "__main__":
     print(f"X shape: {X.shape}")
     print(f"Y shape: {Y.shape}")
     
-    # 1. 数据切分
+    # 1. Data splitting
     x_train, x_val, y_train, y_val = split_data(X, Y)
     
-    # 2. 构建模型（使用AdamW优化器）
+    # 2. Build model (using AdamW optimizer)
     model = build_model((x_train.shape[1],), y_train.shape[1], optimizer_type='adamw')
-    print("\n模型架构摘要:")
+    print("\nModel Architecture Summary:")
     model.summary()
     
-    # 3. 模型预热训练
+    # 3. Model warmup training
     warmup_history = warmup_training(model, x_train, y_train, x_val, y_val, warmup_epochs=15)
     
-    # 4. 渐进式训练
-    print("\n开始渐进式训练...")
+    # 4. Progressive training
+    print("\nStarting progressive training...")
     training_history = progressive_training(
         model, x_train, y_train, x_val, y_val,
         batch_sizes=[64, 128, 256],
         epochs_per_stage=80
     )
     
-    # 5. 最终评估
+    # 5. Final evaluation
     final_results = evaluate_model(model, x_val, y_val)
     
-    # 6. 可视化训练过程
+    # 6. Visualize training process
     all_history = [warmup_history] + training_history
-    plot_training_history(all_history, "完整训练历史")
+    plot_training_history(all_history, "Complete Training History")
     
-    # 7. 保存最终模型
+    # 7. Save final model
     model.save('final_advanced_model.h5')
-    print("\n模型已保存为 'final_advanced_model.h5'")
+    print("\nModel saved as 'final_advanced_model.h5'")
     
-    # 8. 打印最终结果
+    # 8. Print final results
     print(f"\n{'='*60}")
-    print("最终训练结果")
+    print("Final Training Results")
     print(f"{'='*60}")
-    print(f"最终损失: {final_results[0]:.4f}")
-    print(f"最终MAE: {final_results[1]:.4f}")
-    print(f"最终MSE: {final_results[2]:.4f}")
+    print(f"Final Loss: {final_results[0]:.4f}")
+    print(f"Final MAE: {final_results[1]:.4f}")
+    print(f"Final MSE: {final_results[2]:.4f}")
