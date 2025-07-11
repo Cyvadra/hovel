@@ -267,10 +267,9 @@ def plot_training_history(history, title):
     plt.savefig(f'{title.lower().replace(" ", "_")}_training_history.png', dpi=300, bbox_inches='tight')
     plt.show()
 
-def main():
-    """Main training function"""
-    print("Starting TensorFlow Model Training with Distillation")
-    print("=" * 60)
+def prepare_data():
+    """Prepare and preprocess the data"""
+    print("Preparing data...")
     
     # Load data
     X, Y = load_data()
@@ -291,12 +290,15 @@ def main():
     X_train_scaled, Y_train_scaled = preprocessor.scale_data(X_train, Y_train, fit=True)
     X_val_scaled, Y_val_scaled = preprocessor.scale_data(X_val, Y_val, fit=False)
     
-    # Build and train teacher model
+    return (X_train_scaled, Y_train_scaled, X_val_scaled, Y_val_scaled, preprocessor)
+
+def train_teacher_model(X_train_scaled, Y_train_scaled, X_val_scaled, Y_val_scaled):
+    """Train the teacher model"""
     print("\n" + "="*40)
     print("TRAINING TEACHER MODEL")
     print("="*40)
     
-    teacher = TeacherModel(input_shape=(X_train.shape[1],), output_shape=Y_train.shape[1])
+    teacher = TeacherModel(input_shape=(X_train_scaled.shape[1],), output_shape=Y_train_scaled.shape[1])
     teacher_model = teacher.build_model()
     teacher.compile_model(learning_rate=1e-4)
     
@@ -322,15 +324,21 @@ def main():
     print(f"MAE: {teacher_val_mae:.4f}")
     print(f"MSE: {teacher_val_mse:.4f}")
     
-    # Build and train student model
+    # Save teacher model
+    teacher_model.save('teacher_model.h5')
+    
+    return teacher_model, teacher_val_mae
+
+def train_student_model(X_train_scaled, Y_train_scaled, X_val_scaled, Y_val_scaled, first_layer_width=16):
+    """Train the student model"""
     print("\n" + "="*40)
     print("TRAINING STUDENT MODEL")
     print("="*40)
     
     student = StudentModel(
-        input_shape=(X_train.shape[1],), 
-        output_shape=Y_train.shape[1], 
-        first_layer_width=24
+        input_shape=(X_train_scaled.shape[1],), 
+        output_shape=Y_train_scaled.shape[1], 
+        first_layer_width=first_layer_width
     )
     student_model = student.build_model()
     student.compile_model(learning_rate=1e-4)
@@ -357,7 +365,11 @@ def main():
     print(f"MAE: {student_val_mae:.4f}")
     print(f"MSE: {student_val_mse:.4f}")
     
-    # Model distillation
+    return student_model, student_val_mae
+
+def run_distillation(X_train_scaled, Y_train_scaled, X_val_scaled, Y_val_scaled, 
+                    teacher_model, student_model, temperature=3.0, alpha=0.7, epochs=50):
+    """Run model distillation"""
     print("\n" + "="*40)
     print("MODEL DISTILLATION")
     print("="*40)
@@ -367,7 +379,7 @@ def main():
     
     # Create distillation trainer
     distillation_trainer = DistillationTrainer(
-        teacher_model, student_model, temperature=3.0, alpha=0.7
+        teacher_model, student_model, temperature=temperature, alpha=alpha
     )
     
     # Create a custom training loop for distillation
@@ -386,10 +398,9 @@ def main():
     
     # Distillation training
     print("Starting distillation training...")
-    distillation_epochs = 50
     batch_size = 32
     
-    for epoch in range(distillation_epochs):
+    for epoch in range(epochs):
         total_loss = 0
         num_batches = 0
         
@@ -405,7 +416,7 @@ def main():
         avg_loss = total_loss / num_batches
         
         if epoch % 10 == 0:
-            print(f"Distillation Epoch {epoch+1}/{distillation_epochs}, Loss: {avg_loss:.4f}")
+            print(f"Distillation Epoch {epoch+1}/{epochs}, Loss: {avg_loss:.4f}")
     
     # Evaluate distilled student model
     distilled_val_loss, distilled_val_mae, distilled_val_mse = student_model.evaluate(
@@ -416,9 +427,54 @@ def main():
     print(f"MAE: {distilled_val_mae:.4f}")
     print(f"MSE: {distilled_val_mse:.4f}")
     
-    # Save models
-    teacher_model.save('teacher_model.h5')
-    student_model.save('student_model.h5')
+    # Save distilled student model
+    student_model.save('student_model_distilled.h5')
+    
+    return distilled_val_mae
+
+def load_pretrained_models():
+    """Load pretrained teacher and student models"""
+    print("Loading pretrained models...")
+    
+    if not os.path.exists('teacher_model.h5'):
+        raise FileNotFoundError("Teacher model 'teacher_model.h5' not found!")
+    
+    teacher_model = keras.models.load_model('teacher_model.h5')
+
+    if os.path.exists('student_model.h5'):
+        student_model = keras.models.load_model('student_model.h5')
+    elif os.path.exists('student_model_distilled.h5'):
+        student_model = keras.models.load_model('student_model_distilled.h5')
+    else:
+        # build new student model
+        student_model = StudentModel(
+            input_shape=(X_train_scaled.shape[1],), 
+            output_shape=Y_train_scaled.shape[1], 
+            first_layer_width=16
+        )
+        student_model.build_model()
+        student_model.compile_model(learning_rate=1e-4)
+    
+    print("Models loaded successfully!")
+    return teacher_model, student_model
+
+def main():
+    """Main training function - runs complete pipeline"""
+    print("Starting TensorFlow Model Training with Distillation")
+    print("=" * 60)
+    
+    # Prepare data
+    X_train_scaled, Y_train_scaled, X_val_scaled, Y_val_scaled, preprocessor = prepare_data()
+    
+    # Train teacher model
+    teacher_model, teacher_val_mae = train_teacher_model(X_train_scaled, Y_train_scaled, X_val_scaled, Y_val_scaled)
+    
+    # Train student model
+    student_model, student_val_mae = train_student_model(X_train_scaled, Y_train_scaled, X_val_scaled, Y_val_scaled)
+    
+    # Run distillation
+    distilled_val_mae = run_distillation(X_train_scaled, Y_train_scaled, X_val_scaled, Y_val_scaled, 
+                                       teacher_model, student_model)
     
     # Summary
     print("\n" + "="*60)
@@ -433,7 +489,39 @@ def main():
     print(f"  Student (after distillation): {distilled_val_mae:.4f}")
     
     print("\nTraining completed successfully!")
-    print("Models saved as 'teacher_model.h5' and 'student_model.h5'")
+    print("Models saved as 'teacher_model.h5' and 'student_model_distilled.h5'")
+
+def run_distillation_only():
+    """Run only the distillation process with pretrained models"""
+    print("Running Model Distillation Only")
+    print("=" * 60)
+    
+    # Prepare data
+    X_train_scaled, Y_train_scaled, X_val_scaled, Y_val_scaled, preprocessor = prepare_data()
+    
+    # Load pretrained models
+    teacher_model, student_model = load_pretrained_models()
+    
+    # Run distillation
+    distilled_val_mae = run_distillation(X_train_scaled, Y_train_scaled, X_val_scaled, Y_val_scaled, 
+                                       teacher_model, student_model)
+    
+    # Summary
+    print("\n" + "="*60)
+    print("DISTILLATION SUMMARY")
+    print("="*60)
+    print(f"Teacher Model Parameters: {teacher_model.count_params():,}")
+    print(f"Student Model Parameters: {student_model.count_params():,}")
+    print(f"Compression Ratio: {teacher_model.count_params() / student_model.count_params():.1f}x")
+    print(f"Distilled Student MAE: {distilled_val_mae:.4f}")
+    
+    print("\nDistillation completed successfully!")
+    print("Distilled model saved as 'student_model_distilled.h5'")
 
 if __name__ == "__main__":
-    main()
+    import sys
+    
+    if len(sys.argv) > 1 and sys.argv[1] == "--distillation-only":
+        run_distillation_only()
+    else:
+        main()

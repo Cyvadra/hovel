@@ -26,8 +26,15 @@ pip install -r requirements.txt
 ```
 
 2. Run the training program:
+
+**Complete training pipeline:**
 ```bash
 python train.py
+```
+
+**Only model distillation (requires pretrained models):**
+```bash
+python train.py --distillation-only
 ```
 
 ## Program Structure
@@ -58,11 +65,18 @@ python train.py
 
 ## Training Process
 
+### Complete Pipeline
 1. **Data Preparation**: Clean, clip, and scale the data
 2. **Teacher Training**: Train the large teacher model
 3. **Student Training**: Train the small student model
 4. **Distillation**: Transfer knowledge from teacher to student
 5. **Evaluation**: Compare performance of all models
+
+### Distillation Only
+1. **Data Preparation**: Load and preprocess data
+2. **Model Loading**: Load pretrained teacher and student models
+3. **Distillation**: Transfer knowledge from teacher to student
+4. **Evaluation**: Evaluate distilled student model
 
 ## Safe Training Features
 
@@ -75,7 +89,8 @@ python train.py
 ## Output Files
 
 - `teacher_model.h5`: Trained teacher model
-- `student_model.h5`: Trained and distilled student model
+- `student_model.h5`: Trained student model (before distillation)
+- `student_model_distilled.h5`: Student model after distillation
 - `best_teacher_model.h5`: Best teacher model weights
 - `teacher_model_training_history.png`: Teacher training plots
 - `student_model_training_history.png`: Student training plots
@@ -84,12 +99,14 @@ python train.py
 ## Customization
 
 ### Load Your Own Data
-Replace the `generate_sample_data()` call in `main()` with your data loading:
+Replace the `load_data()` function with your data loading:
 
 ```python
-# Load your data here
-X = your_data_loading_function()
-Y = your_target_loading_function()
+def load_data():
+    # Load your data here
+    X = your_data_loading_function()
+    Y = your_target_loading_function()
+    return X, Y
 ```
 
 ### Modify Model Architecture
