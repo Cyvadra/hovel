@@ -164,14 +164,29 @@ class DistillationTrainer:
         
     def distillation_loss(self, y_true, y_pred, teacher_predictions):
         """Custom distillation loss combining ground truth and teacher knowledge"""
+        # Ensure all inputs are tensors with the same shape and dtype
+        y_true = tf.cast(y_true, tf.float32)
+        y_pred = tf.cast(y_pred, tf.float32)
+        teacher_predictions = tf.cast(teacher_predictions, tf.float32)
+        
+        # Ensure all tensors have the same shape
+        if y_true.shape != y_pred.shape:
+            print(f"Warning: y_true shape {y_true.shape} != y_pred shape {y_pred.shape}")
+            # Try to broadcast if possible
+            y_pred = tf.broadcast_to(y_pred, y_true.shape)
+        
+        if teacher_predictions.shape != y_pred.shape:
+            print(f"Warning: teacher_predictions shape {teacher_predictions.shape} != y_pred shape {y_pred.shape}")
+            # Try to broadcast if possible
+            teacher_predictions = tf.broadcast_to(teacher_predictions, y_pred.shape)
+        
         # Ground truth loss
-        ground_truth_loss = keras.losses.mean_absolute_error(y_true, y_pred)
+        ground_truth_loss = tf.reduce_mean(tf.abs(y_true - y_pred))
         
         # Distillation loss (soft targets)
-        distillation_loss = keras.losses.mean_absolute_error(
-            teacher_predictions / self.temperature,
-            y_pred / self.temperature
-        )
+        distillation_loss = tf.reduce_mean(tf.abs(
+            teacher_predictions / self.temperature - y_pred / self.temperature
+        ))
         
         # Combined loss
         total_loss = self.alpha * distillation_loss + (1 - self.alpha) * ground_truth_loss
@@ -378,12 +393,33 @@ def run_distillation(X_train_scaled, Y_train_scaled, X_val_scaled, Y_val_scaled,
     print(f"Student model type: {type(student_model)}")
     
     # Get teacher predictions for distillation
+    print("Getting teacher predictions...")
     teacher_predictions = teacher_model.predict(X_train_scaled)
+    print(f"Teacher predictions shape: {teacher_predictions.shape}")
+    print(f"Y_train_scaled shape: {Y_train_scaled.shape}")
     
     # Create distillation trainer
     distillation_trainer = DistillationTrainer(
         teacher_model, student_model, temperature=temperature, alpha=alpha
     )
+    
+    # Test distillation loss with a small batch to catch shape issues early
+    print("Testing distillation loss with sample batch...")
+    test_batch_size = min(10, len(X_train_scaled))
+    test_x = X_train_scaled[:test_batch_size]
+    test_y = Y_train_scaled[:test_batch_size]
+    test_teacher_pred = teacher_predictions[:test_batch_size]
+    
+    test_student_pred = student_model.predict(test_x)
+    print(f"Test student predictions shape: {test_student_pred.shape}")
+    
+    try:
+        test_loss = distillation_trainer.distillation_loss(test_y, test_student_pred, test_teacher_pred)
+        print(f"Test distillation loss: {test_loss}")
+        print("Distillation loss test passed ✓")
+    except Exception as e:
+        print(f"Error in distillation loss test: {e}")
+        raise
     
     # Create a custom training loop for distillation
     def distillation_training_step(x_batch, y_batch, teacher_pred_batch):
@@ -397,14 +433,14 @@ def run_distillation(X_train_scaled, Y_train_scaled, X_val_scaled, Y_val_scaled,
         student_model.optimizer.apply_gradients(
             zip(gradients, student_model.trainable_variables)
         )
-        return loss
+        return tf.reduce_mean(loss)  # Ensure we return a scalar
     
     # Distillation training
     print("Starting distillation training...")
     batch_size = 32
     
     for epoch in range(epochs):
-        total_loss = 0
+        total_loss = 0.0
         num_batches = 0
         
         for i in range(0, len(X_train_scaled), batch_size):
@@ -412,8 +448,13 @@ def run_distillation(X_train_scaled, Y_train_scaled, X_val_scaled, Y_val_scaled,
             y_batch = Y_train_scaled[i:i+batch_size]
             teacher_pred_batch = teacher_predictions[i:i+batch_size]
             
+            # Convert to tensors to ensure consistency
+            x_batch = tf.convert_to_tensor(x_batch, dtype=tf.float32)
+            y_batch = tf.convert_to_tensor(y_batch, dtype=tf.float32)
+            teacher_pred_batch = tf.convert_to_tensor(teacher_pred_batch, dtype=tf.float32)
+            
             loss = distillation_training_step(x_batch, y_batch, teacher_pred_batch)
-            total_loss += loss
+            total_loss += float(loss)  # Convert to Python float
             num_batches += 1
         
         avg_loss = total_loss / num_batches
