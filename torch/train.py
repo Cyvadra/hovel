@@ -41,19 +41,16 @@ class TinyModel(nn.Module):
     def __init__(self, input_dim, output_dim):
         super().__init__()
         self.net = nn.Sequential(
-            nn.Linear(input_dim, 8),
-            nn.SiLU(), # SiLU (Sigmoid Linear Unit) activation function
-            nn.Linear(8, 24),
+            nn.Linear(input_dim, 24),
             nn.SiLU(),
-            nn.Dropout(0.2), # Dropout for regularization, drops 20% of neurons
             nn.Linear(24, 24),
             nn.SiLU(),
-            nn.Dropout(0.2),
+            nn.Dropout(0.05),
+            nn.Linear(24, 24),
+            nn.SiLU(),
+            nn.Dropout(0.03),
             nn.Linear(24, 12),
-            # nn.Softmax(dim=-1), # Softmax is typically for classification output.
-                                # For regression, this layer might be inappropriate
-                                # if the target values are not probabilities.
-                                # If your Y values are continuous, consider removing this.
+            nn.Softmax(),
             nn.Linear(12, output_dim),
         )
         
@@ -134,15 +131,16 @@ def train_model(train_loader, val_loader, input_dim, output_dim):
         model = nn.DataParallel(model)
     model.to(device) # Move model to the selected device
     
-    # Optimizer: AdamW with a small learning rate and weight decay for regularization
-    optimizer = optim.AdamW(model.parameters(), lr=1e-5, weight_decay=2e-6)
+    # Optimizer: SGD with a small learning rate and momentum
+    # Changed from AdamW to SGD as requested
+    optimizer = optim.SGD(model.parameters(), lr=2e-4, momentum=0.9, weight_decay=2e-6)
     
     # Learning Rate Scheduler: Reduces learning rate when validation loss stops improving
     scheduler = ReduceLROnPlateau(
         optimizer, 
         mode='min', # Monitor minimum validation loss
         factor=0.5, # Reduce LR by a factor of 0.5
-        patience=20 # Wait for 20 epochs before reducing LR
+        patience=50 # Wait for 20 epochs before reducing LR
     )
     
     criterion = nn.MSELoss() # Mean Squared Error Loss for regression
@@ -150,7 +148,7 @@ def train_model(train_loader, val_loader, input_dim, output_dim):
     # Early stopping parameters
     best_val_loss = float('inf') # Initialize with infinity to ensure first loss is better
     patience_counter = 0 # Counter for early stopping patience
-    patience = 50 # Number of epochs to wait for improvement before early stopping (increased for more training)
+    patience = 100 # Number of epochs to wait for improvement before early stopping (increased for more training)
     
     train_losses = [] # To store training loss for each epoch
     val_losses = [] # To store validation loss for each epoch
@@ -292,7 +290,7 @@ if __name__ == "__main__":
     output_dim = Y.shape[1]
     
     # Setup data loaders for training and validation
-    train_loader, val_loader = setup_training(X, Y, batch_size=32)
+    train_loader, val_loader = setup_training(X, Y, batch_size=64)
     
     # Train the model (or continue training if best_model.pth exists)
     model, train_losses, val_losses = train_model(
