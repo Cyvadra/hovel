@@ -43,21 +43,13 @@ class TinyModel(nn.Module):
         self.net = nn.Sequential(
             nn.Linear(input_dim, 512),
             nn.SiLU(),
-            nn.Linear(512, 256),
+            nn.Linear(512, 512),
             nn.SiLU(),
-            nn.Dropout(0.05),
-            nn.Linear(256, 256),
+            nn.Linear(512, 512),
             nn.SiLU(),
-            nn.Dropout(0.05),
-            nn.Linear(256, 256),
-            nn.SiLU(),
-            nn.Dropout(0.05),
-            nn.Linear(256, 256),
-            nn.SiLU(),
-            nn.Dropout(0.03),
-            nn.Linear(256, 256),
+            nn.Linear(512, 512),
             nn.Softmax(),
-            nn.Linear(256, output_dim),
+            nn.Linear(512, output_dim),
         )
         
     def forward(self, x):
@@ -137,8 +129,8 @@ def train_model(train_loader, val_loader, input_dim, output_dim):
         model = nn.DataParallel(model)
     model.to(device) # Move model to the selected device
     
-    # Optimizer: SGD with a small learning rate and momentum
-    optimizer = optim.SGD(model.parameters(), lr=1e-3, momentum=0.9, weight_decay=2e-6)
+    # Optimizer: AdamW with a small learning rate and weight decay for regularization
+    optimizer = optim.AdamW(model.parameters(), lr=2e-4, weight_decay=1e-5)
     
     # Learning Rate Scheduler: Reduces learning rate when validation loss stops improving
     scheduler = ReduceLROnPlateau(
@@ -295,7 +287,7 @@ if __name__ == "__main__":
     output_dim = Y.shape[1]
     
     # Setup data loaders for training and validation
-    train_loader, val_loader = setup_training(X, Y, batch_size=64)
+    train_loader, val_loader = setup_training(X, Y, batch_size=32)
     
     # Train the model (or continue training if best_model.pth exists)
     model, train_losses, val_losses = train_model(
