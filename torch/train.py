@@ -81,8 +81,7 @@ def train_model(train_loader, val_loader, input_dim, output_dim):
         optimizer, 
         mode='min',
         factor=0.5,
-        patience=20,
-        verbose=True
+        patience=20
     )
     criterion = nn.MSELoss()
     
