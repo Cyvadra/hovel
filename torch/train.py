@@ -18,7 +18,7 @@ def load_and_preprocess_data(file_path='training_data.h5'):
             X = X.T
             Y = Y.T
 
-        Y = np.clip(Y, a_min=-100.0, a_max=100.0)
+        Y = np.sign(Y) * np.log1p(np.abs(Y))
 
         print(f"X shape: {X.shape}, dtype: {X.dtype}")
         print(f"Y shape: {Y.shape}, dtype: {Y.dtype}")
@@ -29,12 +29,17 @@ class TinyModel(nn.Module):
     def __init__(self, input_dim, output_dim):
         super().__init__()
         self.net = nn.Sequential(
-            nn.Linear(input_dim, 16),
-            nn.SiLU(),  # Swish activation
-            nn.Dropout(0.2),
-            nn.Linear(16, 8),
+            nn.Linear(input_dim, 8),
             nn.SiLU(),
-            nn.Linear(8, output_dim)
+            nn.Linear(8, 24),
+            nn.SiLU(),
+            nn.Dropout(0.2),
+            nn.Linear(24, 24),
+            nn.SiLU(),
+            nn.Dropout(0.2),
+            nn.Linear(24, 12),
+            nn.Softmax(),
+            nn.Linear(12, output_dim),
         )
         
     def forward(self, x):
@@ -71,12 +76,12 @@ def train_model(train_loader, val_loader, input_dim, output_dim):
     model.to(device)
     
     # Optimizer with weight decay
-    optimizer = optim.AdamW(model.parameters(), lr=1e-4, weight_decay=1e-5)
+    optimizer = optim.AdamW(model.parameters(), lr=1e-5, weight_decay=2e-6)
     scheduler = ReduceLROnPlateau(
         optimizer, 
         mode='min',
         factor=0.5,
-        patience=10,
+        patience=20,
         verbose=True
     )
     criterion = nn.MSELoss()
