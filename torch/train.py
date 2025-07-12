@@ -236,25 +236,26 @@ def plot_losses(train_losses, val_losses):
     plt.savefig('loss_curve.png') # Save the plot to a file
     plt.close() # Close the plot to free memory
 
-def plot_predictions(model, val_loader):
+def plot_predictions(model, val_loader, stride=10):
     """
-    Plots actual vs. predicted values for a subset of validation data.
+    Plots actual vs. predicted values for a subset of validation data with reduced density.
 
     Args:
         model (nn.Module): Trained PyTorch model.
         val_loader (DataLoader): DataLoader for validation data.
+        stride (int): Step size for downsampling the data points (default: 10).
     """
     # Get the device the model is currently on
     device = next(model.parameters()).device
-    model.eval() # Set model to evaluation mode
+    model.eval()  # Set model to evaluation mode
     
     all_targets = []
     all_outputs = []
     
-    with torch.no_grad(): # Disable gradient calculation
+    with torch.no_grad():  # Disable gradient calculation
         for inputs, targets in val_loader:
-            inputs = inputs.to(device) # Move inputs to device
-            outputs = model(inputs).cpu().numpy() # Get predictions and move to CPU as numpy array
+            inputs = inputs.to(device)  # Move inputs to device
+            outputs = model(inputs).cpu().numpy()  # Get predictions and move to CPU as numpy array
             all_outputs.append(outputs)
             all_targets.append(targets.numpy())
     
@@ -262,19 +263,24 @@ def plot_predictions(model, val_loader):
     all_targets = np.vstack(all_targets)
     all_outputs = np.vstack(all_outputs)
     
+    # Downsample the data using the specified stride
+    indices = np.arange(0, len(all_targets), stride)
+    downsampled_targets = all_targets[indices]
+    downsampled_outputs = all_outputs[indices]
+    
     plt.figure(figsize=(14, 10))
     # Plot predictions for up to 5 output dimensions
     for i in range(min(5, all_targets.shape[1])):
-        plt.subplot(min(5, all_targets.shape[1]), 1, i+1) # Create subplots
-        plt.plot(all_targets[:, i], 'b-', label='Actual') # Actual values in blue solid line
-        plt.plot(all_outputs[:, i], 'r--', label='Predicted', alpha=0.7) # Predicted values in red dashed line
+        plt.subplot(min(5, all_targets.shape[1]), 1, i+1)  # Create subplots
+        plt.plot(downsampled_targets[:, i], 'b-', label='Actual')  # Actual values in blue solid line
+        plt.plot(downsampled_outputs[:, i], 'r--', label='Predicted', alpha=0.7)  # Predicted values in red dashed line
         plt.ylabel(f'Y_{i+1}')
         plt.legend()
-    plt.xlabel('Samples')
-    plt.suptitle('Validation Set: Actual vs Predicted') # Main title for the plot
-    plt.tight_layout(rect=[0, 0.03, 1, 0.95]) # Adjust layout to prevent title overlap
-    plt.savefig('predictions.png') # Save the plot
-    plt.close() # Close the plot
+    plt.xlabel(f'Samples (downsampled by {stride}x)')
+    plt.suptitle('Validation Set: Actual vs Predicted (Downsampled)')  # Main title for the plot
+    plt.tight_layout(rect=[0, 0.03, 1, 0.95])  # Adjust layout to prevent title overlap
+    plt.savefig('predictions.png')  # Save the plot
+    plt.close()  # Close the plot
 
 # --- Main Execution ---
 if __name__ == "__main__":
