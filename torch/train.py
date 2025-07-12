@@ -41,17 +41,23 @@ class TinyModel(nn.Module):
     def __init__(self, input_dim, output_dim):
         super().__init__()
         self.net = nn.Sequential(
-            nn.Linear(input_dim, 24),
+            nn.Linear(input_dim, 512),
             nn.SiLU(),
-            nn.Linear(24, 24),
+            nn.Linear(512, 256),
             nn.SiLU(),
             nn.Dropout(0.05),
-            nn.Linear(24, 24),
+            nn.Linear(256, 256),
+            nn.SiLU(),
+            nn.Dropout(0.05),
+            nn.Linear(256, 256),
+            nn.SiLU(),
+            nn.Dropout(0.05),
+            nn.Linear(256, 256),
             nn.SiLU(),
             nn.Dropout(0.03),
-            nn.Linear(24, 12),
+            nn.Linear(256, 256),
             nn.Softmax(),
-            nn.Linear(12, output_dim),
+            nn.Linear(256, output_dim),
         )
         
     def forward(self, x):
@@ -132,8 +138,7 @@ def train_model(train_loader, val_loader, input_dim, output_dim):
     model.to(device) # Move model to the selected device
     
     # Optimizer: SGD with a small learning rate and momentum
-    # Changed from AdamW to SGD as requested
-    optimizer = optim.SGD(model.parameters(), lr=2e-4, momentum=0.9, weight_decay=2e-6)
+    optimizer = optim.SGD(model.parameters(), lr=1e-3, momentum=0.9, weight_decay=2e-6)
     
     # Learning Rate Scheduler: Reduces learning rate when validation loss stops improving
     scheduler = ReduceLROnPlateau(
