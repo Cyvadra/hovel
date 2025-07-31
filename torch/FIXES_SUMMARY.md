@@ -16,13 +16,19 @@
 - 在权重计算前对 p1 进行 clamp 操作：`p1_clamped = torch.clamp(p1, -1.0, 1.0)`
 - 确保权重和始终为1
 
-### 2. 导入错误
+### 2. 导入错误和函数调用错误
 **问题描述：**
 - `test_model_sizes.py` 尝试导入不存在的 `TinyModel`
+- `setup_training` 函数返回3个值，但代码只解包2个值
+- `train_model` 函数需要 `test_loader` 参数，但调用时缺少
+- `train_model` 函数返回4个值，但代码只解包3个值
 
 **解决方案：**
 - 从导入语句中移除 `TinyModel`
-- 修改 `plot_predictions` 调用，添加必需的 `output_dim` 参数
+- 修改 `setup_training` 解包，接收所有3个返回值
+- 修改 `train_model` 调用，添加 `test_loader` 参数
+- 修改 `train_model` 解包，接收所有4个返回值
+- 更新结果存储和图表，包含测试损失
 
 ## 修复的文件
 
@@ -35,10 +41,15 @@
 
 ### 3. `test_model_sizes.py`
 - 移除不存在的 `TinyModel` 导入
+- 修改 `setup_training` 解包，接收所有3个返回值
+- 修改 `train_model` 调用，添加 `test_loader` 参数
+- 修改 `train_model` 解包，接收所有4个返回值
 - 修改 `plot_predictions` 调用，添加 `output_dim` 参数
+- 更新结果存储和图表，包含测试损失
 
 ### 4. 新增文件
 - `test_weight_fix.py`: 权重计算验证脚本
+- `test_model_sizes_fix.py`: 模型大小测试修复验证脚本
 - `FIXES_SUMMARY.md`: 本修复总结文档
 
 ## 验证方法

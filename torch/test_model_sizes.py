@@ -29,7 +29,7 @@ def test_model_sizes(hidden_sizes=[128, 256, 512, 1024]):
     output_dim = Y.shape[1]
     
     # Setup data loaders (same for all models)
-    train_loader, val_loader = setup_training(X, Y, batch_size=32)
+    train_loader, val_loader, test_loader = setup_training(X, Y, batch_size=32)
     
     # Store results for comparison
     results = {}
@@ -44,8 +44,8 @@ def test_model_sizes(hidden_sizes=[128, 256, 512, 1024]):
         
         try:
             # Train the model
-            model, train_losses, val_losses = train_model(
-                train_loader, val_loader, input_dim, output_dim, 
+            model, train_losses, val_losses, test_loss = train_model(
+                train_loader, val_loader, test_loader, input_dim, output_dim, 
                 hidden_size=hidden_size, model_name=model_name
             )
             
@@ -57,6 +57,7 @@ def test_model_sizes(hidden_sizes=[128, 256, 512, 1024]):
             results[hidden_size] = {
                 'final_train_loss': train_losses[-1],
                 'final_val_loss': val_losses[-1],
+                'final_test_loss': test_loss,
                 'best_val_loss': min(val_losses),
                 'epochs_trained': len(train_losses),
                 'train_losses': train_losses,
@@ -66,6 +67,7 @@ def test_model_sizes(hidden_sizes=[128, 256, 512, 1024]):
             print(f"Model {hidden_size} completed successfully!")
             print(f"Final train loss: {train_losses[-1]:.6f}")
             print(f"Final val loss: {val_losses[-1]:.6f}")
+            print(f"Final test loss: {test_loss:.6f}")
             print(f"Best val loss: {min(val_losses):.6f}")
             print(f"Epochs trained: {len(train_losses)}")
             
@@ -124,12 +126,14 @@ def create_comparison_plots(results, hidden_sizes):
     sizes = list(successful_results.keys())
     final_train_losses = [successful_results[s]['final_train_loss'] for s in sizes]
     final_val_losses = [successful_results[s]['final_val_loss'] for s in sizes]
+    final_test_losses = [successful_results[s]['final_test_loss'] for s in sizes]
     
     x = np.arange(len(sizes))
-    width = 0.35
+    width = 0.25
     
-    plt.bar(x - width/2, final_train_losses, width, label='Final Train Loss', alpha=0.8)
-    plt.bar(x + width/2, final_val_losses, width, label='Final Val Loss', alpha=0.8)
+    plt.bar(x - width, final_train_losses, width, label='Final Train Loss', alpha=0.8)
+    plt.bar(x, final_val_losses, width, label='Final Val Loss', alpha=0.8)
+    plt.bar(x + width, final_test_losses, width, label='Final Test Loss', alpha=0.8)
     plt.xlabel('Hidden Size')
     plt.ylabel('Loss')
     plt.title('Final Loss Comparison')
@@ -169,6 +173,7 @@ def save_results(results, hidden_sizes):
             json_results[hidden_size] = {
                 'final_train_loss': float(result['final_train_loss']),
                 'final_val_loss': float(result['final_val_loss']),
+                'final_test_loss': float(result['final_test_loss']),
                 'best_val_loss': float(result['best_val_loss']),
                 'epochs_trained': result['epochs_trained']
             }
