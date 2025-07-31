@@ -38,18 +38,19 @@ class TinyModel(nn.Module):
     Designed for regression tasks, but includes Softmax which is typically for classification.
     Consider removing Softmax if this is purely a regression problem.
     """
-    def __init__(self, input_dim, output_dim):
+    def __init__(self, input_dim, output_dim, hidden_size=512):
         super().__init__()
+        self.hidden_size = hidden_size
         self.net = nn.Sequential(
-            nn.Linear(input_dim, 512),
+            nn.Linear(input_dim, hidden_size),
             nn.SiLU(),
-            nn.Linear(512, 512),
+            nn.Linear(hidden_size, hidden_size),
             nn.SiLU(),
-            nn.Linear(512, 512),
+            nn.Linear(hidden_size, hidden_size),
             nn.SiLU(),
-            nn.Linear(512, 512),
+            nn.Linear(hidden_size, hidden_size),
             nn.Softmax(),
-            nn.Linear(512, output_dim),
+            nn.Linear(hidden_size, output_dim),
         )
         
     def forward(self, x):
@@ -96,7 +97,7 @@ def setup_training(X, Y, batch_size=32):
     return train_loader, val_loader
 
 # --- 4. Training Function ---
-def train_model(train_loader, val_loader, input_dim, output_dim):
+def train_model(train_loader, val_loader, input_dim, output_dim, hidden_size=512, model_name="model"):
     """
     Trains the TinyModel, handles multi-GPU, early stopping, and learning rate scheduling.
     Now loads existing model if 'best_model.pth' exists and saves checkpoints.
@@ -106,6 +107,8 @@ def train_model(train_loader, val_loader, input_dim, output_dim):
         val_loader (DataLoader): DataLoader for validation data.
         input_dim (int): Dimension of input features.
         output_dim (int): Dimension of output targets.
+        hidden_size (int): Size of hidden layers in the model.
+        model_name (str): Name prefix for saving model files and plots.
 
     Returns:
         tuple: Trained model, list of training losses, list of validation losses.
@@ -114,14 +117,17 @@ def train_model(train_loader, val_loader, input_dim, output_dim):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
     
-    model = TinyModel(input_dim, output_dim)
+    model = TinyModel(input_dim, output_dim, hidden_size)
+    
+    # Create model-specific file names
+    best_model_path = f'{model_name}_best_model.pth'
     
     # --- MODIFICATION 1: Load existing model if best_model.pth exists ---
-    if os.path.exists('best_model.pth'):
-        print("Found 'best_model.pth'. Loading pre-trained model state.")
-        model.load_state_dict(torch.load('best_model.pth', map_location=device))
+    if os.path.exists(best_model_path):
+        print(f"Found '{best_model_path}'. Loading pre-trained model state.")
+        model.load_state_dict(torch.load(best_model_path, map_location=device))
     else:
-        print("No 'best_model.pth' found. Starting training from scratch.")
+        print(f"No '{best_model_path}' found. Starting training from scratch.")
 
     # Multi-GPU setup using DataParallel if more than one GPU is available
     if torch.cuda.device_count() > 1:
@@ -195,7 +201,7 @@ def train_model(train_loader, val_loader, input_dim, output_dim):
             best_val_loss = epoch_val_loss
             patience_counter = 0
             # Save the best model found so far
-            torch.save(model.state_dict(), 'best_model.pth')
+            torch.save(model.state_dict(), best_model_path)
             print(f"Saved new best model with validation loss: {best_val_loss:.6f}")
         else:
             patience_counter += 1
@@ -205,7 +211,7 @@ def train_model(train_loader, val_loader, input_dim, output_dim):
         
         # --- MODIFICATION 2: Save checkpoint every 100 epochs ---
         if (epoch + 1) % 100 == 0:
-            checkpoint_path = f'checkpoint_epoch_{epoch+1}.pth'
+            checkpoint_path = f'{model_name}_checkpoint_epoch_{epoch+1}.pth'
             torch.save(model.state_dict(), checkpoint_path)
             print(f"Saved checkpoint to {checkpoint_path}")
 
@@ -213,30 +219,31 @@ def train_model(train_loader, val_loader, input_dim, output_dim):
             
     # Load the best model saved during training before returning
     print("Loading the best model state for final evaluation and plotting.")
-    model.load_state_dict(torch.load('best_model.pth', map_location=device))
+    model.load_state_dict(torch.load(best_model_path, map_location=device))
     return model, train_losses, val_losses
 
 # --- 5. Plotting Functions ---
-def plot_losses(train_losses, val_losses):
+def plot_losses(train_losses, val_losses, model_name="model"):
     """
     Plots the training and validation loss curves.
 
     Args:
         train_losses (list): List of training losses per epoch.
         val_losses (list): List of validation losses per epoch.
+        model_name (str): Name prefix for saving the plot file.
     """
     plt.figure(figsize=(10, 6))
     plt.plot(train_losses, label='Training Loss')
     plt.plot(val_losses, label='Validation Loss')
     plt.xlabel('Epochs')
     plt.ylabel('MSE Loss')
-    plt.title('Training and Validation Loss')
+    plt.title(f'Training and Validation Loss - {model_name}')
     plt.legend()
     plt.grid(True)
-    plt.savefig('loss_curve.png') # Save the plot to a file
+    plt.savefig(f'{model_name}_loss_curve.png') # Save the plot to a file
     plt.close() # Close the plot to free memory
 
-def plot_predictions(model, val_loader, stride=10):
+def plot_predictions(model, val_loader, stride=10, model_name="model"):
     """
     Plots actual vs. predicted values for a subset of validation data with reduced density.
 
@@ -244,6 +251,7 @@ def plot_predictions(model, val_loader, stride=10):
         model (nn.Module): Trained PyTorch model.
         val_loader (DataLoader): DataLoader for validation data.
         stride (int): Step size for downsampling the data points (default: 10).
+        model_name (str): Name prefix for saving the plot file.
     """
     # Get the device the model is currently on
     device = next(model.parameters()).device
@@ -277,9 +285,9 @@ def plot_predictions(model, val_loader, stride=10):
         plt.ylabel(f'Y_{i+1}')
         plt.legend()
     plt.xlabel(f'Samples (downsampled by {stride}x)')
-    plt.suptitle('Validation Set: Actual vs Predicted (Downsampled)')  # Main title for the plot
+    plt.suptitle(f'Validation Set: Actual vs Predicted (Downsampled) - {model_name}')  # Main title for the plot
     plt.tight_layout(rect=[0, 0.03, 1, 0.95])  # Adjust layout to prevent title overlap
-    plt.savefig('predictions.png')  # Save the plot
+    plt.savefig(f'{model_name}_predictions.png')  # Save the plot
     plt.close()  # Close the plot
 
 # --- Main Execution ---
