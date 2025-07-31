@@ -35,9 +35,9 @@ def load_state_dict_safely(file_path, device):
 
 def load_and_preprocess_data(file_path='training_data.h5'):
     with h5py.File(file_path, 'r') as f:
-        # Load X and Y, ensuring float16 type
-        X = np.array(f['X'][:], dtype=np.float16)
-        Y = np.array(f['Y'][:], dtype=np.float16)
+        # Load X and Y, ensuring float32 type
+        X = np.array(f['X'][:], dtype=np.float32)
+        Y = np.array(f['Y'][:], dtype=np.float32)
 
         # Transpose if the first dimension is smaller than the second,
         # assuming samples are along the first dimension.
@@ -76,8 +76,6 @@ class TinyModel(nn.Module):
             nn.Softmax(),
             nn.Linear(hidden_size, output_dim),
         )
-        # Convert model parameters to float16
-        self.to(torch.float16)
         
     def forward(self, x):
         """
@@ -104,9 +102,9 @@ def setup_training(X, Y, batch_size=32):
     Returns:
         tuple: train_loader and val_loader (PyTorch DataLoader objects).
     """
-    # Convert numpy arrays to PyTorch tensors with float16 precision
-    X_tensor = torch.from_numpy(X).to(torch.float16)
-    Y_tensor = torch.from_numpy(Y).to(torch.float16)
+    # Convert numpy arrays to PyTorch tensors
+    X_tensor = torch.from_numpy(X)
+    Y_tensor = torch.from_numpy(Y)
     
     # Create a TensorDataset from the tensors
     dataset = TensorDataset(X_tensor, Y_tensor)
@@ -167,9 +165,6 @@ def train_model(train_loader, val_loader, input_dim, output_dim, hidden_size=512
         model = nn.DataParallel(model)
     model.to(device) # Move model to the selected device
     
-    # Ensure model is using float16 precision
-    model = model.to(torch.float16)
-    
     # Optimizer: AdamW with a small learning rate and weight decay for regularization
     optimizer = optim.AdamW(model.parameters(), lr=2e-4, weight_decay=1e-5)
     
@@ -197,7 +192,7 @@ def train_model(train_loader, val_loader, input_dim, output_dim, hidden_size=512
         model.train() # Set model to training mode
         epoch_train_loss = 0
         for inputs, targets in train_loader:
-            inputs, targets = inputs.to(device).to(torch.float16), targets.to(device).to(torch.float16) # Move data to device and ensure float16
+            inputs, targets = inputs.to(device), targets.to(device) # Move data to device
             
             optimizer.zero_grad() # Clear previous gradients
             outputs = model(inputs) # Forward pass
@@ -212,7 +207,7 @@ def train_model(train_loader, val_loader, input_dim, output_dim, hidden_size=512
         epoch_val_loss = 0
         with torch.no_grad(): # Disable gradient calculation for validation
             for inputs, targets in val_loader:
-                inputs, targets = inputs.to(device).to(torch.float16), targets.to(device).to(torch.float16)
+                inputs, targets = inputs.to(device), targets.to(device)
                 outputs = model(inputs)
                 loss = criterion(outputs, targets)
                 epoch_val_loss += loss.item() * inputs.size(0)
@@ -293,7 +288,7 @@ def plot_predictions(model, val_loader, stride=10, model_name="model"):
     
     with torch.no_grad():  # Disable gradient calculation
         for inputs, targets in val_loader:
-            inputs = inputs.to(device).to(torch.float16)  # Move inputs to device and ensure float16
+            inputs = inputs.to(device)  # Move inputs to device
             outputs = model(inputs).cpu().numpy()  # Get predictions and move to CPU as numpy array
             all_outputs.append(outputs)
             all_targets.append(targets.numpy())
