@@ -9,6 +9,30 @@ import os
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 
 # --- 1. Data Loading and Preprocessing ---
+def load_state_dict_safely(file_path, device):
+    """
+    Load state dict safely, handling both DataParallel and non-DataParallel saved models.
+    
+    Args:
+        file_path (str): Path to the saved model file.
+        device (torch.device): Device to load the model on.
+        
+    Returns:
+        dict: Cleaned state dict ready for loading.
+    """
+    state_dict = torch.load(file_path, map_location=device)
+    
+    # Handle DataParallel saved models (remove 'module.' prefix)
+    new_state_dict = {}
+    for key, value in state_dict.items():
+        if key.startswith('module.'):
+            new_key = key[7:]  # Remove 'module.' prefix
+            new_state_dict[new_key] = value
+        else:
+            new_state_dict[key] = value
+    
+    return new_state_dict
+
 def load_and_preprocess_data(file_path='training_data.h5'):
     with h5py.File(file_path, 'r') as f:
         # Load X and Y, ensuring float32 type
@@ -125,7 +149,13 @@ def train_model(train_loader, val_loader, input_dim, output_dim, hidden_size=512
     # --- MODIFICATION 1: Load existing model if best_model.pth exists ---
     if os.path.exists(best_model_path):
         print(f"Found '{best_model_path}'. Loading pre-trained model state.")
-        model.load_state_dict(torch.load(best_model_path, map_location=device))
+        try:
+            new_state_dict = load_state_dict_safely(best_model_path, device)
+            model.load_state_dict(new_state_dict)
+            print("Successfully loaded pre-trained model state.")
+        except RuntimeError as e:
+            print(f"Warning: Could not load existing model state: {e}")
+            print("Starting training from scratch.")
     else:
         print(f"No '{best_model_path}' found. Starting training from scratch.")
 
@@ -148,17 +178,16 @@ def train_model(train_loader, val_loader, input_dim, output_dim, hidden_size=512
     
     criterion = nn.MSELoss() # Mean Squared Error Loss for regression
     
-    # Early stopping parameters
+    # Training parameters
     best_val_loss = float('inf') # Initialize with infinity to ensure first loss is better
-    patience_counter = 0 # Counter for early stopping patience
-    patience = 100 # Number of epochs to wait for improvement before early stopping (increased for more training)
+    last_save_epoch = -10 # Track when we last saved to enforce minimum interval
     
     train_losses = [] # To store training loss for each epoch
     val_losses = [] # To store validation loss for each epoch
     
-    # --- MODIFICATION 2: Remove epoch limit and train until early stop ---
-    epoch = 0
-    while True: # Loop indefinitely until early stopping condition is met
+    # --- MODIFICATION: Train for exactly 60 epochs ---
+    num_epochs = 60
+    for epoch in range(num_epochs):
         # Training phase
         model.train() # Set model to training mode
         epoch_train_loss = 0
@@ -196,30 +225,27 @@ def train_model(train_loader, val_loader, input_dim, output_dim, hidden_size=512
         # Learning rate scheduling step
         scheduler.step(epoch_val_loss)
         
-        # Early stopping check
+        # Check for best validation loss and save with minimum interval
         if epoch_val_loss < best_val_loss:
             best_val_loss = epoch_val_loss
-            patience_counter = 0
-            # Save the best model found so far
-            torch.save(model.state_dict(), best_model_path)
-            print(f"Saved new best model with validation loss: {best_val_loss:.6f}")
-        else:
-            patience_counter += 1
-            if patience_counter >= patience:
-                print(f"Early stopping triggered at epoch {epoch+1} due to no improvement in validation loss for {patience} epochs.")
-                break # Exit the training loop
+            # Only save if at least 10 epochs have passed since last save
+            if epoch - last_save_epoch >= 10:
+                torch.save(model.state_dict(), best_model_path)
+                last_save_epoch = epoch
+                print(f"Saved new best model with validation loss: {best_val_loss:.6f} (epoch {epoch+1})")
+            else:
+                print(f"New best validation loss: {best_val_loss:.6f} (epoch {epoch+1}) - skipping save (min interval: 10 epochs)")
         
-        # --- MODIFICATION 2: Save checkpoint every 100 epochs ---
-        if (epoch + 1) % 100 == 0:
+        # Save checkpoint every 20 epochs
+        if (epoch + 1) % 20 == 0:
             checkpoint_path = f'{model_name}_checkpoint_epoch_{epoch+1}.pth'
             torch.save(model.state_dict(), checkpoint_path)
             print(f"Saved checkpoint to {checkpoint_path}")
-
-        epoch += 1 # Increment epoch counter
             
     # Load the best model saved during training before returning
     print("Loading the best model state for final evaluation and plotting.")
-    model.load_state_dict(torch.load(best_model_path, map_location=device))
+    new_state_dict = load_state_dict_safely(best_model_path, device)
+    model.load_state_dict(new_state_dict)
     return model, train_losses, val_losses
 
 # --- 5. Plotting Functions ---
