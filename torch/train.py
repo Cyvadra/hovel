@@ -804,6 +804,12 @@ def plot_losses(train_losses, val_losses, model_name="improved_model"):
     """
     Enhanced plotting with better visualization.
     """
+    # Remove first 40 elements if length is bigger than 200
+    if len(train_losses) > 200:
+        train_losses = train_losses[40:]
+    if len(val_losses) > 200:
+        val_losses = val_losses[40:]
+    
     plt.figure(figsize=(12, 8))
     
     # Main loss plot
