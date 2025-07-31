@@ -45,7 +45,7 @@ def check_existing_plots(model_name):
         bool: True if all plots exist, False otherwise
     """
     plot_files = [
-        f"{model_name}_loss_curve.png",
+        f"{model_name}_loss_analysis.png",
         f"{model_name}_predictions.png"
     ]
     
@@ -403,7 +403,7 @@ def print_summary(results, hidden_sizes, num_layers):
         for num_layer in num_layers:
             key = f"{hidden_size}_{num_layer}"
             if key in successful_results:
-                print(f"- model_{hidden_size}_layers_{num_layer}_loss_curve.png")
+                print(f"- model_{hidden_size}_layers_{num_layer}_loss_analysis.png")
                 print(f"- model_{hidden_size}_layers_{num_layer}_predictions.png")
                 print(f"- model_{hidden_size}_layers_{num_layer}_best_model.pth")
 
