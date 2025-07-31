@@ -13,7 +13,7 @@ from datetime import datetime
 # Import functions from the original train.py
 from train import load_and_preprocess_data, setup_training, train_model, plot_losses, plot_predictions, TinyModel
 
-def test_model_sizes(hidden_sizes=[64, 128, 256, 512]):
+def test_model_sizes(hidden_sizes=[128, 256, 512, 1024]):
     """
     Test different model sizes and save all results.
     
@@ -230,5 +230,5 @@ def print_summary(results, hidden_sizes):
 
 if __name__ == "__main__":
     # Test the specified model sizes
-    hidden_sizes = [64, 128, 256, 512]
+    hidden_sizes = [128, 256, 512, 1024]
     results = test_model_sizes(hidden_sizes) 
