@@ -18,15 +18,31 @@ warnings.filterwarnings('ignore')
 # --- Logging Setup ---
 def setup_logging(model_name="improved_model"):
     """Setup logging configuration."""
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(levelname)s - %(message)s',
-        handlers=[
-            logging.FileHandler(f'{model_name}_training.log'),
-            logging.StreamHandler()
-        ]
-    )
-    return logging.getLogger(__name__)
+    # Create a logger specific to this model
+    logger = logging.getLogger(f"training_{model_name}")
+    logger.setLevel(logging.INFO)
+    
+    # Clear any existing handlers to avoid duplicates
+    logger.handlers.clear()
+    
+    # Create formatter
+    formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+    
+    # Create file handler
+    file_handler = logging.FileHandler(f'{model_name}_training.log')
+    file_handler.setLevel(logging.INFO)
+    file_handler.setFormatter(formatter)
+    
+    # Create console handler
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.INFO)
+    console_handler.setFormatter(formatter)
+    
+    # Add handlers to logger
+    logger.addHandler(file_handler)
+    logger.addHandler(console_handler)
+    
+    return logger
 
 class TrainingMetrics:
     """Track and log training metrics."""
