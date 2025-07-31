@@ -9,11 +9,78 @@ import os
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 import json
 from datetime import datetime
+import gc
 
 # Import functions from the original train.py
 from train import load_and_preprocess_data, setup_training, train_model, plot_losses, plot_predictions
 
-def test_model_sizes(hidden_sizes=[128, 1024, 2048], num_layers=[4, 8, 16]):
+def clear_gpu_memory():
+    """Clear GPU memory and garbage collect."""
+    if torch.cuda.is_available():
+        # Print memory usage before clearing
+        allocated = torch.cuda.memory_allocated() / 1024**3
+        cached = torch.cuda.memory_reserved() / 1024**3
+        print(f"GPU memory before clearing: {allocated:.2f}GB allocated, {cached:.2f}GB cached")
+        
+        # Clear cache and synchronize
+        torch.cuda.empty_cache()
+        torch.cuda.synchronize()
+        
+        # Print memory usage after clearing
+        allocated = torch.cuda.memory_allocated() / 1024**3
+        cached = torch.cuda.memory_reserved() / 1024**3
+        print(f"GPU memory after clearing: {allocated:.2f}GB allocated, {cached:.2f}GB cached")
+    
+    # Force garbage collection
+    gc.collect()
+
+def check_existing_plots(model_name):
+    """
+    Check if plots for a specific model already exist.
+    
+    Args:
+        model_name (str): Name of the model
+        
+    Returns:
+        bool: True if all plots exist, False otherwise
+    """
+    plot_files = [
+        f"{model_name}_loss_curve.png",
+        f"{model_name}_predictions.png"
+    ]
+    
+    all_exist = all(os.path.exists(f) for f in plot_files)
+    if all_exist:
+        print(f"Plots for {model_name} already exist, skipping...")
+    return all_exist
+
+def check_existing_model_files(model_name):
+    """
+    Check if model files for a specific model already exist.
+    
+    Args:
+        model_name (str): Name of the model
+        
+    Returns:
+        bool: True if model file exists, False otherwise
+    """
+    model_file = f"{model_name}_best_model.pth"
+    exists = os.path.exists(model_file)
+    if exists:
+        print(f"Model file for {model_name} already exists, skipping...")
+    return exists
+
+def show_gpu_memory_usage():
+    """Display current GPU memory usage."""
+    if torch.cuda.is_available():
+        allocated = torch.cuda.memory_allocated() / 1024**3
+        cached = torch.cuda.memory_reserved() / 1024**3
+        total = torch.cuda.get_device_properties(0).total_memory / 1024**3
+        print(f"GPU Memory: {allocated:.2f}GB allocated, {cached:.2f}GB cached, {total:.2f}GB total")
+    else:
+        print("CUDA not available")
+
+def test_model_sizes(hidden_sizes=[1536, 1024, 512, 128], num_layers=[16, 8, 4, 2]):
     """
     Test different model sizes and save all results.
     
@@ -24,6 +91,10 @@ def test_model_sizes(hidden_sizes=[128, 1024, 2048], num_layers=[4, 8, 16]):
     print("Starting model size comparison test...")
     print(f"Testing hidden sizes: {hidden_sizes}")
     print(f"Testing number of layers: {num_layers}")
+    
+    # Show initial GPU memory usage
+    print("\nInitial GPU memory status:")
+    show_gpu_memory_usage()
     
     # Load and prepare data
     X, Y = load_and_preprocess_data()
@@ -42,8 +113,16 @@ def test_model_sizes(hidden_sizes=[128, 1024, 2048], num_layers=[4, 8, 16]):
             print(f"Testing model with hidden size: {hidden_size}, layers: {num_layer}")
             print(f"{'='*50}")
             
+            # Show current GPU memory usage
+            show_gpu_memory_usage()
+            
             # Create model name for file naming
             model_name = f"model_{hidden_size}_layers_{num_layer}"
+            
+            # Check if model files and plots already exist
+            if check_existing_model_files(model_name) and check_existing_plots(model_name):
+                print(f"Skipping {model_name} - model files and plots already exist")
+                continue
             
             try:
                 # Train the model
@@ -86,6 +165,10 @@ def test_model_sizes(hidden_sizes=[128, 1024, 2048], num_layers=[4, 8, 16]):
                     'num_layers': num_layer,
                     'error': str(e)
                 }
+            finally:
+                # Clear GPU memory after each model training
+                print("Clearing GPU memory...")
+                clear_gpu_memory()
     
     # Create comparison plots
     create_comparison_plots(results, hidden_sizes, num_layers)
@@ -326,6 +409,6 @@ def print_summary(results, hidden_sizes, num_layers):
 
 if __name__ == "__main__":
     # Test the specified model sizes
-    hidden_sizes = [128, 1024, 2048]
-    num_layers = [4, 8, 16]
+    hidden_sizes = [1536, 1024, 512, 128]
+    num_layers = [16, 8, 4, 2]
     results = test_model_sizes(hidden_sizes, num_layers) 
