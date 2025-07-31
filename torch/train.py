@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import DataLoader, TensorDataset, random_split
+from torch.utils.data import DataLoader, TensorDataset
 import numpy as np
 import matplotlib.pyplot as plt
 import h5py
@@ -110,9 +110,17 @@ def setup_training(X, Y, batch_size=32):
     dataset = TensorDataset(X_tensor, Y_tensor)
     
     # Split the dataset into training and validation sets (90% train, 10% validation)
-    val_size = int(0.1 * len(dataset))
-    train_size = len(dataset) - val_size
-    train_set, val_set = random_split(dataset, [train_size, val_size])
+    # Use sequential split instead of random split - take first 90% for training, last 10% for validation
+    total_size = len(dataset)
+    train_size = int(0.9 * total_size)
+    val_size = total_size - train_size
+    
+    # Create sequential splits
+    train_indices = list(range(0, train_size))
+    val_indices = list(range(train_size, total_size))
+    
+    train_set = torch.utils.data.Subset(dataset, train_indices)
+    val_set = torch.utils.data.Subset(dataset, val_indices)
     
     # Create data loaders for training and validation
     train_loader = DataLoader(train_set, batch_size=batch_size, shuffle=True) # Shuffle training data
