@@ -409,6 +409,6 @@ def print_summary(results, hidden_sizes, num_layers):
 
 if __name__ == "__main__":
     # Test the specified model sizes
-    hidden_sizes = [1536, 1024, 512, 128]
-    num_layers = [16, 8, 4, 2]
+    hidden_sizes = [2048, 1024, 512, 256, 128]
+    num_layers = [32, 16, 8, 4, 2, 1]
     results = test_model_sizes(hidden_sizes, num_layers) 

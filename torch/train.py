@@ -9,9 +9,146 @@ import os
 from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts, ReduceLROnPlateau
 from torch.nn import functional as F
 import warnings
+from torch.cuda.amp import GradScaler, autocast
+import logging
+import time
+from collections import defaultdict
 warnings.filterwarnings('ignore')
 
+# --- Logging Setup ---
+def setup_logging(model_name="improved_model"):
+    """Setup logging configuration."""
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.FileHandler(f'{model_name}_training.log'),
+            logging.StreamHandler()
+        ]
+    )
+    return logging.getLogger(__name__)
+
+class TrainingMetrics:
+    """Track and log training metrics."""
+    
+    def __init__(self):
+        self.metrics = defaultdict(list)
+        self.start_time = time.time()
+    
+    def update(self, epoch, train_loss, val_loss, lr, **kwargs):
+        """Update metrics for current epoch."""
+        self.metrics['epoch'].append(epoch)
+        self.metrics['train_loss'].append(train_loss)
+        self.metrics['val_loss'].append(val_loss)
+        self.metrics['learning_rate'].append(lr)
+        
+        for key, value in kwargs.items():
+            self.metrics[key].append(value)
+    
+    def get_best_epoch(self):
+        """Get epoch with best validation loss."""
+        if not self.metrics['val_loss']:
+            return -1
+        return np.argmin(self.metrics['val_loss'])
+    
+    def get_training_time(self):
+        """Get total training time."""
+        return time.time() - self.start_time
+    
+    def log_summary(self, logger):
+        """Log training summary."""
+        if not self.metrics['val_loss']:
+            return
+        
+        best_epoch = self.get_best_epoch()
+        best_val_loss = min(self.metrics['val_loss'])
+        total_time = self.get_training_time()
+        
+        logger.info(f"Training Summary:")
+        logger.info(f"  Best epoch: {best_epoch + 1}")
+        logger.info(f"  Best validation loss: {best_val_loss:.6f}")
+        logger.info(f"  Total training time: {total_time:.2f} seconds")
+        logger.info(f"  Final learning rate: {self.metrics['learning_rate'][-1]:.2e}")
+
+# --- Configuration Management ---
+class TrainingConfig:
+    """Centralized configuration for training parameters."""
+    
+    def __init__(self):
+        # Model parameters
+        self.hidden_size = 512
+        self.num_layers = 4
+        self.dropout_rate = 0.1
+        
+        # Training parameters
+        self.batch_size = 64
+        self.learning_rate = 1e-3
+        self.weight_decay = 1e-4
+        self.max_epochs = 300
+        self.patience = 30
+        self.gradient_clip_norm = 1.0
+        
+        # Data parameters
+        self.val_split = 0.1
+        self.test_split = 0.1
+        self.num_workers = 4
+        
+        # Loss parameters
+        self.mse_weight = 0.7
+        self.huber_weight = 0.3
+        self.huber_delta = 1.0
+        
+        # Scheduler parameters
+        self.scheduler_t0 = 20
+        self.scheduler_t_mult = 2
+        self.scheduler_eta_min = 1e-6
+        
+        # Mixed precision
+        self.use_mixed_precision = True
+        
+        # Model saving
+        self.save_checkpoint_every = 50
+    
+    def update(self, **kwargs):
+        """Update configuration with new parameters."""
+        for key, value in kwargs.items():
+            if hasattr(self, key):
+                setattr(self, key, value)
+            else:
+                print(f"Warning: Unknown config parameter '{key}'")
+
 # --- 1. Data Loading and Preprocessing ---
+def clear_gpu_memory():
+    """Clear GPU memory and garbage collect."""
+    if torch.cuda.is_available():
+        # Show memory usage before clearing
+        allocated = torch.cuda.memory_allocated() / 1024**3
+        cached = torch.cuda.memory_reserved() / 1024**3
+        print(f"GPU memory before clearing: {allocated:.2f}GB allocated, {cached:.2f}GB cached")
+        
+        # Clear memory cache
+        torch.cuda.empty_cache()
+        torch.cuda.synchronize()
+        
+        # Show memory usage after clearing
+        allocated = torch.cuda.memory_allocated() / 1024**3
+        cached = torch.cuda.memory_reserved() / 1024**3
+        print(f"GPU memory after clearing: {allocated:.2f}GB allocated, {cached:.2f}GB cached")
+    
+    # Force garbage collection
+    import gc
+    gc.collect()
+
+def show_gpu_memory_usage():
+    """Show current GPU memory usage."""
+    if torch.cuda.is_available():
+        allocated = torch.cuda.memory_allocated() / 1024**3
+        cached = torch.cuda.memory_reserved() / 1024**3
+        total = torch.cuda.get_device_properties(0).total_memory / 1024**3
+        print(f"GPU Memory: {allocated:.2f}GB allocated, {cached:.2f}GB cached, {total:.2f}GB total")
+    else:
+        print("CUDA not available")
+
 def load_state_dict_safely(file_path, device):
     """
     Load state dict safely, handling both DataParallel and non-DataParallel saved models.
@@ -151,7 +288,7 @@ class ImprovedModel(nn.Module):
         return x
 
 # --- 3. Improved Training Setup ---
-def setup_training(X, Y, batch_size=32, val_split=0.1, test_split=0.1):
+def setup_training(X, Y, batch_size=32, val_split=0.1, test_split=0.1, num_workers=4):
     """
     Prepares PyTorch DataLoaders with proper train/val/test split.
 
@@ -161,6 +298,7 @@ def setup_training(X, Y, batch_size=32, val_split=0.1, test_split=0.1):
         batch_size (int): Size of batches for data loaders.
         val_split (float): Fraction of data for validation.
         test_split (float): Fraction of data for testing.
+        num_workers (int): Number of workers for data loading.
 
     Returns:
         tuple: train_loader, val_loader, test_loader
@@ -184,12 +322,34 @@ def setup_training(X, Y, batch_size=32, val_split=0.1, test_split=0.1):
         generator=torch.Generator().manual_seed(42)
     )
     
-    # Create data loaders
-    train_loader = DataLoader(train_set, batch_size=batch_size, shuffle=True, pin_memory=True)
-    val_loader = DataLoader(val_set, batch_size=batch_size, shuffle=False, pin_memory=True)
-    test_loader = DataLoader(test_set, batch_size=batch_size, shuffle=False, pin_memory=True)
+    # Create data loaders with improved settings
+    train_loader = DataLoader(
+        train_set, 
+        batch_size=batch_size, 
+        shuffle=True, 
+        pin_memory=True,
+        num_workers=num_workers,
+        persistent_workers=True if num_workers > 0 else False
+    )
+    val_loader = DataLoader(
+        val_set, 
+        batch_size=batch_size, 
+        shuffle=False, 
+        pin_memory=True,
+        num_workers=num_workers,
+        persistent_workers=True if num_workers > 0 else False
+    )
+    test_loader = DataLoader(
+        test_set, 
+        batch_size=batch_size, 
+        shuffle=False, 
+        pin_memory=True,
+        num_workers=num_workers,
+        persistent_workers=True if num_workers > 0 else False
+    )
     
     print(f"Dataset split - Train: {train_size}, Val: {val_size}, Test: {test_size}")
+    print(f"Data loading with {num_workers} workers")
     
     return train_loader, val_loader, test_loader
 
@@ -305,7 +465,7 @@ class WeightedCombinedLoss(nn.Module):
 # --- 5. Improved Training Function ---
 def train_model(train_loader, val_loader, test_loader, input_dim, output_dim, 
                 hidden_size=512, num_layers=4, dropout_rate=0.1, model_name="improved_model",
-                enable_early_stop=True, fixed_epochs=300):
+                enable_early_stop=True, fixed_epochs=300, config=None):
     """
     Improved training function with modern best practices:
     - Better learning rate scheduling
@@ -313,45 +473,62 @@ def train_model(train_loader, val_loader, test_loader, input_dim, output_dim,
     - Gradient clipping
     - Mixed precision training
     - Better monitoring and logging
+    - Configuration management
     
     Args:
         enable_early_stop (bool): If True, use early stopping logic. If False, train for fixed_epochs.
         fixed_epochs (int): Number of epochs to train when early stopping is disabled.
+        config (TrainingConfig): Configuration object. If None, uses default config.
     """
+    # Use provided config or create default
+    if config is None:
+        config = TrainingConfig()
+        config.update(
+            hidden_size=hidden_size,
+            num_layers=num_layers,
+            dropout_rate=dropout_rate,
+            max_epochs=fixed_epochs if not enable_early_stop else 300
+        )
+    
+    # Setup logging
+    logger = setup_logging(model_name)
+    metrics = TrainingMetrics()
+    
     # Determine the device to use
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Using device: {device}")
+    logger.info(f"Using device: {device}")
+    show_gpu_memory_usage()
     
     # Create model
-    model = ImprovedModel(input_dim, output_dim, hidden_size, num_layers, dropout_rate)
+    model = ImprovedModel(input_dim, output_dim, config.hidden_size, config.num_layers, config.dropout_rate)
     
     # Create model-specific file names
     best_model_path = f'{model_name}_best_model.pth'
     
     # Load existing model if available
     if os.path.exists(best_model_path):
-        print(f"Found '{best_model_path}'. Loading pre-trained model state.")
+        logger.info(f"Found '{best_model_path}'. Loading pre-trained model state.")
         try:
             new_state_dict = load_state_dict_safely(best_model_path, device)
             model.load_state_dict(new_state_dict)
-            print("Successfully loaded pre-trained model state.")
+            logger.info("Successfully loaded pre-trained model state.")
         except RuntimeError as e:
-            print(f"Warning: Could not load existing model state: {e}")
-            print("Starting training from scratch.")
+            logger.warning(f"Could not load existing model state: {e}")
+            logger.info("Starting training from scratch.")
     else:
-        print(f"No '{best_model_path}' found. Starting training from scratch.")
+        logger.info(f"No '{best_model_path}' found. Starting training from scratch.")
 
     # Multi-GPU setup
     if torch.cuda.device_count() > 1:
-        print(f"Using {torch.cuda.device_count()} GPUs!")
+        logger.info(f"Using {torch.cuda.device_count()} GPUs!")
         model = nn.DataParallel(model)
     model.to(device)
     
     # Improved optimizer: AdamW with better hyperparameters
     optimizer = optim.AdamW(
         model.parameters(), 
-        lr=1e-3,  # Higher initial learning rate
-        weight_decay=1e-4,  # Stronger regularization
+        lr=config.learning_rate,
+        weight_decay=config.weight_decay,
         betas=(0.9, 0.999),
         eps=1e-8
     )
@@ -359,122 +536,223 @@ def train_model(train_loader, val_loader, test_loader, input_dim, output_dim,
     # Improved learning rate scheduler: Cosine annealing with warm restarts
     scheduler = CosineAnnealingWarmRestarts(
         optimizer,
-        T_0=20,  # Initial restart period
-        T_mult=2,  # Multiply period by 2 after each restart
-        eta_min=1e-6  # Minimum learning rate
+        T_0=config.scheduler_t0,
+        T_mult=config.scheduler_t_mult,
+        eta_min=config.scheduler_eta_min
     )
     
     # Use weighted combined loss function for 3*output_dim model
-    criterion = WeightedCombinedLoss(output_dim, mse_weight=0.7, huber_weight=0.3, huber_delta=1.0)
+    criterion = WeightedCombinedLoss(
+        output_dim, 
+        mse_weight=config.mse_weight, 
+        huber_weight=config.huber_weight, 
+        huber_delta=config.huber_delta
+    )
+    
+    # Mixed precision setup
+    scaler = GradScaler() if config.use_mixed_precision else None
     
     # Training parameters
     best_val_loss = float('inf')
-    patience = 30  # Early stopping patience
     patience_counter = 0
     train_losses = []
     val_losses = []
     
     # Training loop
+    num_epochs = config.max_epochs
     if enable_early_stop:
-        num_epochs = 300  # More epochs with early stopping
-        print(f"Training with early stopping enabled (max {num_epochs} epochs, patience: {patience})")
+        logger.info(f"Training with early stopping enabled (max {num_epochs} epochs, patience: {config.patience})")
     else:
-        num_epochs = fixed_epochs
-        print(f"Training for fixed {num_epochs} epochs (early stopping disabled)")
+        logger.info(f"Training for fixed {num_epochs} epochs (early stopping disabled)")
     
-    for epoch in range(num_epochs):
-        # Training phase
-        model.train()
-        epoch_train_loss = 0
-        num_batches = 0
+    try:
+        for epoch in range(num_epochs):
+            # Training phase
+            model.train()
+            epoch_train_loss = 0
+            num_batches = 0
+            
+            for batch_idx, (inputs, targets) in enumerate(train_loader):
+                try:
+                    inputs, targets = inputs.to(device), targets.to(device)
+                    
+                    optimizer.zero_grad()
+                    
+                    if config.use_mixed_precision and scaler is not None:
+                        with autocast():
+                            outputs = model(inputs)
+                            loss = criterion(outputs, targets)
+                        
+                        scaler.scale(loss).backward()
+                        scaler.unscale_(optimizer)
+                        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=config.gradient_clip_norm)
+                        scaler.step(optimizer)
+                        scaler.update()
+                    else:
+                        outputs = model(inputs)
+                        loss = criterion(outputs, targets)
+                        loss.backward()
+                        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=config.gradient_clip_norm)
+                        optimizer.step()
+                    
+                    epoch_train_loss += loss.item()
+                    num_batches += 1
+                    
+                except RuntimeError as e:
+                    if "out of memory" in str(e):
+                        logger.error(f"GPU OOM at batch {batch_idx}. Clearing memory and skipping batch.")
+                        clear_gpu_memory()
+                        continue
+                    else:
+                        raise e
+            
+            # Validation phase
+            model.eval()
+            epoch_val_loss = 0
+            val_batches = 0
+            
+            with torch.no_grad():
+                for inputs, targets in val_loader:
+                    inputs, targets = inputs.to(device), targets.to(device)
+                    
+                    if config.use_mixed_precision and scaler is not None:
+                        with autocast():
+                            outputs = model(inputs)
+                            loss = criterion(outputs, targets)
+                    else:
+                        outputs = model(inputs)
+                        loss = criterion(outputs, targets)
+                    
+                    epoch_val_loss += loss.item()
+                    val_batches += 1
+            
+            # Calculate average losses
+            avg_train_loss = epoch_train_loss / num_batches
+            avg_val_loss = epoch_val_loss / val_batches
+            
+            train_losses.append(avg_train_loss)
+            val_losses.append(avg_val_loss)
+            
+            # Learning rate scheduling
+            scheduler.step()
+            current_lr = optimizer.param_groups[0]['lr']
+            
+            # Update metrics
+            metrics.update(epoch + 1, avg_train_loss, avg_val_loss, current_lr)
+            
+            logger.info(f"Epoch {epoch+1:3d}: "
+                      f"Train Loss: {avg_train_loss:.6f}, "
+                      f"Val Loss: {avg_val_loss:.6f}, "
+                      f"LR: {current_lr:.2e}")
+            
+            # Early stopping and model saving
+            if avg_val_loss < best_val_loss:
+                best_val_loss = avg_val_loss
+                patience_counter = 0
+                torch.save(model.state_dict(), best_model_path)
+                logger.info(f"  -> New best model saved! Val Loss: {best_val_loss:.6f}")
+            else:
+                patience_counter += 1
+                if enable_early_stop and patience_counter >= config.patience:
+                    logger.info(f"  -> Early stopping triggered after {config.patience} epochs without improvement")
+                    break
+            
+            # Save checkpoint periodically
+            if (epoch + 1) % config.save_checkpoint_every == 0:
+                checkpoint_path = f'{model_name}_checkpoint_epoch_{epoch+1}.pth'
+                torch.save(model.state_dict(), checkpoint_path)
+                logger.info(f"  -> Checkpoint saved to {checkpoint_path}")
         
-        for inputs, targets in train_loader:
-            inputs, targets = inputs.to(device), targets.to(device)
-            
-            optimizer.zero_grad()
-            outputs = model(inputs)
-            loss = criterion(outputs, targets)
-            loss.backward()
-            
-            # Gradient clipping to prevent exploding gradients
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-            
-            optimizer.step()
-            
-            epoch_train_loss += loss.item()
-            num_batches += 1
+        # Load the best model for final evaluation
+        logger.info("Loading the best model state for final evaluation.")
+        new_state_dict = load_state_dict_safely(best_model_path, device)
+        model.load_state_dict(new_state_dict)
         
-        # Validation phase
+        # Final evaluation on test set
         model.eval()
-        epoch_val_loss = 0
-        val_batches = 0
+        test_loss = 0
+        test_batches = 0
         
         with torch.no_grad():
-            for inputs, targets in val_loader:
+            for inputs, targets in test_loader:
                 inputs, targets = inputs.to(device), targets.to(device)
-                outputs = model(inputs)
-                loss = criterion(outputs, targets)
-                epoch_val_loss += loss.item()
-                val_batches += 1
+                
+                if config.use_mixed_precision and scaler is not None:
+                    with autocast():
+                        outputs = model(inputs)
+                        loss = criterion(outputs, targets)
+                else:
+                    outputs = model(inputs)
+                    loss = criterion(outputs, targets)
+                
+                test_loss += loss.item()
+                test_batches += 1
         
-        # Calculate average losses
-        avg_train_loss = epoch_train_loss / num_batches
-        avg_val_loss = epoch_val_loss / val_batches
+        final_test_loss = test_loss / test_batches
+        logger.info(f"Final Test Loss: {final_test_loss:.6f}")
         
-        train_losses.append(avg_train_loss)
-        val_losses.append(avg_val_loss)
+        # Log training summary
+        metrics.log_summary(logger)
         
-        # Learning rate scheduling
-        scheduler.step()
-        current_lr = optimizer.param_groups[0]['lr']
+        return model, train_losses, val_losses, final_test_loss
         
-        print(f"Epoch {epoch+1:3d}: "
-              f"Train Loss: {avg_train_loss:.6f}, "
-              f"Val Loss: {avg_val_loss:.6f}, "
-              f"LR: {current_lr:.2e}")
-        
-        # Early stopping and model saving
-        if avg_val_loss < best_val_loss:
-            best_val_loss = avg_val_loss
-            patience_counter = 0
-            torch.save(model.state_dict(), best_model_path)
-            print(f"  -> New best model saved! Val Loss: {best_val_loss:.6f}")
-        else:
-            patience_counter += 1
-            if enable_early_stop and patience_counter >= patience:
-                print(f"  -> Early stopping triggered after {patience} epochs without improvement")
-                break
-        
-        # Save checkpoint every 50 epochs
-        if (epoch + 1) % 50 == 0:
-            checkpoint_path = f'{model_name}_checkpoint_epoch_{epoch+1}.pth'
-            torch.save(model.state_dict(), checkpoint_path)
-            print(f"  -> Checkpoint saved to {checkpoint_path}")
-    
-    # Load the best model for final evaluation
-    print("Loading the best model state for final evaluation.")
-    new_state_dict = load_state_dict_safely(best_model_path, device)
-    model.load_state_dict(new_state_dict)
-    
-    # Final evaluation on test set
-    model.eval()
-    test_loss = 0
-    test_batches = 0
-    
-    with torch.no_grad():
-        for inputs, targets in test_loader:
-            inputs, targets = inputs.to(device), targets.to(device)
-            outputs = model(inputs)
-            loss = criterion(outputs, targets)
-            test_loss += loss.item()
-            test_batches += 1
-    
-    final_test_loss = test_loss / test_batches
-    print(f"Final Test Loss: {final_test_loss:.6f}")
-    
-    return model, train_losses, val_losses, final_test_loss
+    except KeyboardInterrupt:
+        logger.info("Training interrupted by user. Saving current model...")
+        torch.save(model.state_dict(), f'{model_name}_interrupted.pth')
+        return model, train_losses, val_losses, None
+    except Exception as e:
+        logger.error(f"Training failed with error: {e}")
+        raise e
 
 # --- 6. Improved Plotting Functions ---
+def check_existing_plots(model_name):
+    """Check if plots for a specific model already exist."""
+    plot_files = [
+        f"{model_name}_loss_analysis.png",
+        f"{model_name}_predictions.png"
+    ]
+    
+    all_exist = all(os.path.exists(f) for f in plot_files)
+    if all_exist:
+        print(f"Plots for {model_name} already exist, skipping...")
+    return all_exist
+
+def check_existing_model_files(model_name):
+    """Check if model files for a specific model already exist."""
+    model_file = f"{model_name}_best_model.pth"
+    exists = os.path.exists(model_file)
+    if exists:
+        print(f"Model file for {model_name} already exists, skipping...")
+    return exists
+
+def save_training_config(config, model_name):
+    """Save training configuration to a JSON file."""
+    import json
+    
+    config_dict = {key: value for key, value in config.__dict__.items() 
+                   if not key.startswith('_')}
+    
+    config_file = f"{model_name}_config.json"
+    with open(config_file, 'w') as f:
+        json.dump(config_dict, f, indent=2)
+    
+    print(f"Configuration saved to {config_file}")
+
+def load_training_config(model_name):
+    """Load training configuration from a JSON file."""
+    import json
+    
+    config_file = f"{model_name}_config.json"
+    if not os.path.exists(config_file):
+        return None
+    
+    with open(config_file, 'r') as f:
+        config_dict = json.load(f)
+    
+    config = TrainingConfig()
+    config.update(**config_dict)
+    return config
+
 def extract_final_predictions(model_output, output_dim):
     """
     Extract final predictions from 3*output_dim model output.
@@ -638,27 +916,45 @@ if __name__ == "__main__":
     input_dim = X.shape[1]
     output_dim = Y.shape[1]
     
+    # Create configuration
+    config = TrainingConfig()
+    config.update(
+        hidden_size=512,
+        num_layers=4,
+        dropout_rate=0.1,
+        batch_size=64,
+        use_mixed_precision=True
+    )
+    
     print(f"Model configuration:")
     print(f"  Input dimension: {input_dim}")
     print(f"  Original output dimension: {output_dim}")
     print(f"  Model output dimension: {3 * output_dim} (3 values per output: p1, p2, p3)")
-    print(f"  Hidden size: 512")
-    print(f"  Number of layers: 4")
-    print(f"  Dropout rate: 0.1")
+    print(f"  Hidden size: {config.hidden_size}")
+    print(f"  Number of layers: {config.num_layers}")
+    print(f"  Dropout rate: {config.dropout_rate}")
+    print(f"  Batch size: {config.batch_size}")
+    print(f"  Mixed precision: {config.use_mixed_precision}")
     
     # Setup data loaders
-    train_loader, val_loader, test_loader = setup_training(X, Y, batch_size=64)
+    train_loader, val_loader, test_loader = setup_training(
+        X, Y, 
+        batch_size=config.batch_size,
+        val_split=config.val_split,
+        test_split=config.test_split,
+        num_workers=config.num_workers
+    )
     
     # Train the model
-    # You can control early stopping behavior:
-    # enable_early_stop=True: Use early stopping (default)
-    # enable_early_stop=False: Train for fixed 300 epochs
     model, train_losses, val_losses, test_loss = train_model(
         train_loader, val_loader, test_loader, input_dim, output_dim,
-        hidden_size=512, num_layers=4, dropout_rate=0.1,
-        enable_early_stop=True,  # Set to False to train for fixed 300 epochs
-        fixed_epochs=300
+        model_name="improved_model",
+        enable_early_stop=True,
+        config=config
     )
+    
+    # Save configuration
+    save_training_config(config, "improved_model")
     
     # Plot results
     plot_losses(train_losses, val_losses)
@@ -667,6 +963,12 @@ if __name__ == "__main__":
     print("\nTraining complete!")
     print("Files saved:")
     print("  - improved_model_best_model.pth (best model)")
+    print("  - improved_model_config.json (configuration)")
+    print("  - improved_model_training.log (training log)")
     print("  - improved_model_loss_analysis.png (loss curves)")
     print("  - improved_model_predictions.png (predictions)")
-    print(f"  - Final test loss: {test_loss:.6f}")
+    if test_loss is not None:
+        print(f"  - Final test loss: {test_loss:.6f}")
+    
+    # Clear GPU memory
+    clear_gpu_memory()
