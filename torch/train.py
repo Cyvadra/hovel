@@ -267,10 +267,13 @@ class WeightedCombinedLoss(nn.Module):
         p3 = pred_reshaped[:, :, 2]  # positive predictions
         
         # Calculate weights based on p1
+        # Clamp p1 to [-1, 1] range to ensure weights sum to 1
+        p1_clamped = torch.clamp(p1, -1.0, 1.0)
+        
         # When p1 < 0: weight_p2 = abs(p1-1)/2 = (1-p1)/2 (higher weight for p2)
         # When p1 > 0: weight_p3 = abs(p1+1)/2 = (1+p1)/2 (higher weight for p3)
-        weight_p2 = torch.abs(p1 - 1) / 2  # weight for p2 (negative prediction)
-        weight_p3 = torch.abs(p1 + 1) / 2  # weight for p3 (positive prediction)
+        weight_p2 = torch.abs(p1_clamped - 1) / 2  # weight for p2 (negative prediction)
+        weight_p3 = torch.abs(p1_clamped + 1) / 2  # weight for p3 (positive prediction)
         
         # Calculate individual losses for p2 and p3
         loss_p2 = self.mse_loss(p2, target)  # shape: (batch_size, output_dim)
@@ -482,9 +485,10 @@ def extract_final_predictions(model_output, output_dim):
     p2 = pred_reshaped[:, :, 1]  # negative predictions
     p3 = pred_reshaped[:, :, 2]  # positive predictions
     
-    # Calculate weights
-    weight_p2 = torch.abs(p1 - 1) / 2
-    weight_p3 = torch.abs(p1 + 1) / 2
+    # Calculate weights (clamp p1 to ensure weights sum to 1)
+    p1_clamped = torch.clamp(p1, -1.0, 1.0)
+    weight_p2 = torch.abs(p1_clamped - 1) / 2
+    weight_p3 = torch.abs(p1_clamped + 1) / 2
     
     # Weighted combination of p2 and p3
     final_predictions = weight_p2 * p2 + weight_p3 * p3

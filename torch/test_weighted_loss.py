@@ -55,9 +55,10 @@ def test_weighted_loss():
     print(f"p2 (negative) - mean: {torch.mean(p2):.3f}, std: {torch.std(p2):.3f}")
     print(f"p3 (positive) - mean: {torch.mean(p3):.3f}, std: {torch.std(p3):.3f}")
     
-    # Test weight calculation
-    weight_p2 = torch.abs(p1 - 1) / 2
-    weight_p3 = torch.abs(p1 + 1) / 2
+    # Test weight calculation (clamp p1 to ensure weights sum to 1)
+    p1_clamped = torch.clamp(p1, -1.0, 1.0)
+    weight_p2 = torch.abs(p1_clamped - 1) / 2
+    weight_p3 = torch.abs(p1_clamped + 1) / 2
     
     print(f"\nWeight Analysis:")
     print(f"weight_p2 - mean: {torch.mean(weight_p2):.3f}, range: [{torch.min(weight_p2):.3f}, {torch.max(weight_p2):.3f}]")

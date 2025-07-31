@@ -11,7 +11,7 @@ import json
 from datetime import datetime
 
 # Import functions from the original train.py
-from train import load_and_preprocess_data, setup_training, train_model, plot_losses, plot_predictions, TinyModel
+from train import load_and_preprocess_data, setup_training, train_model, plot_losses, plot_predictions
 
 def test_model_sizes(hidden_sizes=[128, 256, 512, 1024]):
     """
@@ -51,7 +51,7 @@ def test_model_sizes(hidden_sizes=[128, 256, 512, 1024]):
             
             # Plot results
             plot_losses(train_losses, val_losses, model_name)
-            plot_predictions(model, val_loader, model_name=model_name)
+            plot_predictions(model, val_loader, output_dim, model_name=model_name)
             
             # Store results
             results[hidden_size] = {
