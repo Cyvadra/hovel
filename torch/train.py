@@ -60,11 +60,11 @@ def load_and_preprocess_data(file_path='training_data.h5'):
         X = (X - X_mean) / X_std
         
         # Robust scaling for Y using median and IQR
-        Y_median = np.median(Y, axis=0, keepdims=True)
-        Y_q75, Y_q25 = np.percentile(Y, [75, 25], axis=0, keepdims=True)
+        Y_median = np.median(Y, axis=0, keepdims=True).astype(np.float32)
+        Y_q75, Y_q25 = np.percentile(Y, [75, 25], axis=0, keepdims=True).astype(np.float32)
         Y_iqr = Y_q75 - Y_q25
-        Y_iqr = np.where(Y_iqr == 0, 1.0, Y_iqr)  # Avoid division by zero
-        Y = (Y - Y_median) / Y_iqr
+        Y_iqr = np.where(Y_iqr == 0, 1.0, Y_iqr).astype(np.float32)  # Avoid division by zero
+        Y = ((Y - Y_median) / Y_iqr).astype(np.float32)
 
         print(f"X shape: {X.shape}, dtype: {X.dtype}")
         print(f"Y shape: {Y.shape}, dtype: {Y.dtype}")
@@ -165,9 +165,9 @@ def setup_training(X, Y, batch_size=32, val_split=0.1, test_split=0.1):
     Returns:
         tuple: train_loader, val_loader, test_loader
     """
-    # Convert numpy arrays to PyTorch tensors
-    X_tensor = torch.from_numpy(X)
-    Y_tensor = torch.from_numpy(Y)
+    # Convert numpy arrays to PyTorch tensors, ensuring float32 type
+    X_tensor = torch.from_numpy(X).float()
+    Y_tensor = torch.from_numpy(Y).float()
     
     # Create a TensorDataset from the tensors
     dataset = TensorDataset(X_tensor, Y_tensor)
