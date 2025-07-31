@@ -304,14 +304,19 @@ class WeightedCombinedLoss(nn.Module):
 
 # --- 5. Improved Training Function ---
 def train_model(train_loader, val_loader, test_loader, input_dim, output_dim, 
-                hidden_size=512, num_layers=4, dropout_rate=0.1, model_name="improved_model"):
+                hidden_size=512, num_layers=4, dropout_rate=0.1, model_name="improved_model",
+                enable_early_stop=True, fixed_epochs=300):
     """
     Improved training function with modern best practices:
     - Better learning rate scheduling
-    - Early stopping with patience
+    - Early stopping with patience (optional)
     - Gradient clipping
     - Mixed precision training
     - Better monitoring and logging
+    
+    Args:
+        enable_early_stop (bool): If True, use early stopping logic. If False, train for fixed_epochs.
+        fixed_epochs (int): Number of epochs to train when early stopping is disabled.
     """
     # Determine the device to use
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -370,7 +375,13 @@ def train_model(train_loader, val_loader, test_loader, input_dim, output_dim,
     val_losses = []
     
     # Training loop
-    num_epochs = 200  # More epochs with early stopping
+    if enable_early_stop:
+        num_epochs = 300  # More epochs with early stopping
+        print(f"Training with early stopping enabled (max {num_epochs} epochs, patience: {patience})")
+    else:
+        num_epochs = fixed_epochs
+        print(f"Training for fixed {num_epochs} epochs (early stopping disabled)")
+    
     for epoch in range(num_epochs):
         # Training phase
         model.train()
@@ -430,7 +441,7 @@ def train_model(train_loader, val_loader, test_loader, input_dim, output_dim,
             print(f"  -> New best model saved! Val Loss: {best_val_loss:.6f}")
         else:
             patience_counter += 1
-            if patience_counter >= patience:
+            if enable_early_stop and patience_counter >= patience:
                 print(f"  -> Early stopping triggered after {patience} epochs without improvement")
                 break
         
@@ -639,9 +650,14 @@ if __name__ == "__main__":
     train_loader, val_loader, test_loader = setup_training(X, Y, batch_size=64)
     
     # Train the model
+    # You can control early stopping behavior:
+    # enable_early_stop=True: Use early stopping (default)
+    # enable_early_stop=False: Train for fixed 300 epochs
     model, train_losses, val_losses, test_loss = train_model(
         train_loader, val_loader, test_loader, input_dim, output_dim,
-        hidden_size=512, num_layers=4, dropout_rate=0.1
+        hidden_size=512, num_layers=4, dropout_rate=0.1,
+        enable_early_stop=True,  # Set to False to train for fixed 300 epochs
+        fixed_epochs=300
     )
     
     # Plot results

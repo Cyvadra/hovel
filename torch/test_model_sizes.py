@@ -13,15 +13,17 @@ from datetime import datetime
 # Import functions from the original train.py
 from train import load_and_preprocess_data, setup_training, train_model, plot_losses, plot_predictions
 
-def test_model_sizes(hidden_sizes=[128, 256, 512, 1024]):
+def test_model_sizes(hidden_sizes=[128, 1024, 2048], num_layers=[4, 8, 16]):
     """
     Test different model sizes and save all results.
     
     Args:
         hidden_sizes (list): List of hidden layer sizes to test.
+        num_layers (list): List of number of layers to test.
     """
     print("Starting model size comparison test...")
     print(f"Testing hidden sizes: {hidden_sizes}")
+    print(f"Testing number of layers: {num_layers}")
     
     # Load and prepare data
     X, Y = load_and_preprocess_data()
@@ -35,58 +37,68 @@ def test_model_sizes(hidden_sizes=[128, 256, 512, 1024]):
     results = {}
     
     for hidden_size in hidden_sizes:
-        print(f"\n{'='*50}")
-        print(f"Testing model with hidden size: {hidden_size}")
-        print(f"{'='*50}")
-        
-        # Create model name for file naming
-        model_name = f"model_{hidden_size}"
-        
-        try:
-            # Train the model
-            model, train_losses, val_losses, test_loss = train_model(
-                train_loader, val_loader, test_loader, input_dim, output_dim, 
-                hidden_size=hidden_size, model_name=model_name
-            )
+        for num_layer in num_layers:
+            print(f"\n{'='*50}")
+            print(f"Testing model with hidden size: {hidden_size}, layers: {num_layer}")
+            print(f"{'='*50}")
             
-            # Plot results
-            plot_losses(train_losses, val_losses, model_name)
-            plot_predictions(model, val_loader, output_dim, model_name=model_name)
+            # Create model name for file naming
+            model_name = f"model_{hidden_size}_layers_{num_layer}"
             
-            # Store results
-            results[hidden_size] = {
-                'final_train_loss': train_losses[-1],
-                'final_val_loss': val_losses[-1],
-                'final_test_loss': test_loss,
-                'best_val_loss': min(val_losses),
-                'epochs_trained': len(train_losses),
-                'train_losses': train_losses,
-                'val_losses': val_losses
-            }
-            
-            print(f"Model {hidden_size} completed successfully!")
-            print(f"Final train loss: {train_losses[-1]:.6f}")
-            print(f"Final val loss: {val_losses[-1]:.6f}")
-            print(f"Final test loss: {test_loss:.6f}")
-            print(f"Best val loss: {min(val_losses):.6f}")
-            print(f"Epochs trained: {len(train_losses)}")
-            
-        except Exception as e:
-            print(f"Error training model with hidden size {hidden_size}: {e}")
-            results[hidden_size] = {'error': str(e)}
+            try:
+                # Train the model
+                model, train_losses, val_losses, test_loss = train_model(
+                    train_loader, val_loader, test_loader, input_dim, output_dim, 
+                    hidden_size=hidden_size, num_layers=num_layer, model_name=model_name,
+                    enable_early_stop=False, fixed_epochs=300
+                )
+                
+                # Plot results
+                plot_losses(train_losses, val_losses, model_name)
+                plot_predictions(model, val_loader, output_dim, model_name=model_name)
+                
+                # Store results
+                key = f"{hidden_size}_{num_layer}"
+                results[key] = {
+                    'hidden_size': hidden_size,
+                    'num_layers': num_layer,
+                    'final_train_loss': train_losses[-1],
+                    'final_val_loss': val_losses[-1],
+                    'final_test_loss': test_loss,
+                    'best_val_loss': min(val_losses),
+                    'epochs_trained': len(train_losses),
+                    'train_losses': train_losses,
+                    'val_losses': val_losses
+                }
+                
+                print(f"Model {hidden_size} layers {num_layer} completed successfully!")
+                print(f"Final train loss: {train_losses[-1]:.6f}")
+                print(f"Final val loss: {val_losses[-1]:.6f}")
+                print(f"Final test loss: {test_loss:.6f}")
+                print(f"Best val loss: {min(val_losses):.6f}")
+                print(f"Epochs trained: {len(train_losses)}")
+                
+            except Exception as e:
+                print(f"Error training model with hidden size {hidden_size}, layers {num_layer}: {e}")
+                key = f"{hidden_size}_{num_layer}"
+                results[key] = {
+                    'hidden_size': hidden_size,
+                    'num_layers': num_layer,
+                    'error': str(e)
+                }
     
     # Create comparison plots
-    create_comparison_plots(results, hidden_sizes)
+    create_comparison_plots(results, hidden_sizes, num_layers)
     
     # Save results to JSON
-    save_results(results, hidden_sizes)
+    save_results(results, hidden_sizes, num_layers)
     
     # Print summary
-    print_summary(results, hidden_sizes)
+    print_summary(results, hidden_sizes, num_layers)
     
     return results
 
-def create_comparison_plots(results, hidden_sizes):
+def create_comparison_plots(results, hidden_sizes, num_layers):
     """Create comparison plots for all models."""
     
     # Filter out failed models
@@ -96,67 +108,135 @@ def create_comparison_plots(results, hidden_sizes):
         print("No successful models to compare!")
         return
     
-    # 1. Loss comparison plot
-    plt.figure(figsize=(12, 8))
+    # Create a larger figure for better visualization
+    plt.figure(figsize=(16, 12))
     
-    plt.subplot(2, 2, 1)
+    # 1. Training loss comparison
+    plt.subplot(2, 3, 1)
     for hidden_size in hidden_sizes:
-        if hidden_size in successful_results:
-            plt.plot(successful_results[hidden_size]['train_losses'], 
-                    label=f'Train {hidden_size}', alpha=0.7)
+        for num_layer in num_layers:
+            key = f"{hidden_size}_{num_layer}"
+            if key in successful_results:
+                plt.plot(successful_results[key]['train_losses'], 
+                        label=f'{hidden_size}h_{num_layer}l', alpha=0.7)
     plt.xlabel('Epochs')
     plt.ylabel('Training Loss')
     plt.title('Training Loss Comparison')
-    plt.legend()
+    plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
     plt.grid(True)
     
-    plt.subplot(2, 2, 2)
+    # 2. Validation loss comparison
+    plt.subplot(2, 3, 2)
     for hidden_size in hidden_sizes:
-        if hidden_size in successful_results:
-            plt.plot(successful_results[hidden_size]['val_losses'], 
-                    label=f'Val {hidden_size}', alpha=0.7)
+        for num_layer in num_layers:
+            key = f"{hidden_size}_{num_layer}"
+            if key in successful_results:
+                plt.plot(successful_results[key]['val_losses'], 
+                        label=f'{hidden_size}h_{num_layer}l', alpha=0.7)
     plt.xlabel('Epochs')
     plt.ylabel('Validation Loss')
     plt.title('Validation Loss Comparison')
-    plt.legend()
+    plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
     plt.grid(True)
     
-    # 3. Final loss comparison
-    plt.subplot(2, 2, 3)
-    sizes = list(successful_results.keys())
-    final_train_losses = [successful_results[s]['final_train_loss'] for s in sizes]
-    final_val_losses = [successful_results[s]['final_val_loss'] for s in sizes]
-    final_test_losses = [successful_results[s]['final_test_loss'] for s in sizes]
+    # 3. Final loss comparison (heatmap style)
+    plt.subplot(2, 3, 3)
+    final_val_losses = np.zeros((len(hidden_sizes), len(num_layers)))
+    final_val_losses.fill(np.nan)
     
-    x = np.arange(len(sizes))
-    width = 0.25
+    for i, hidden_size in enumerate(hidden_sizes):
+        for j, num_layer in enumerate(num_layers):
+            key = f"{hidden_size}_{num_layer}"
+            if key in successful_results:
+                final_val_losses[i, j] = successful_results[key]['final_val_loss']
     
-    plt.bar(x - width, final_train_losses, width, label='Final Train Loss', alpha=0.8)
-    plt.bar(x, final_val_losses, width, label='Final Val Loss', alpha=0.8)
-    plt.bar(x + width, final_test_losses, width, label='Final Test Loss', alpha=0.8)
-    plt.xlabel('Hidden Size')
-    plt.ylabel('Loss')
-    plt.title('Final Loss Comparison')
-    plt.xticks(x, sizes)
-    plt.legend()
-    plt.grid(True, alpha=0.3)
+    im = plt.imshow(final_val_losses, cmap='viridis', aspect='auto')
+    plt.colorbar(im, label='Final Validation Loss')
+    plt.xlabel('Number of Layers')
+    plt.ylabel('Hidden Size')
+    plt.title('Final Validation Loss Heatmap')
+    plt.xticks(range(len(num_layers)), num_layers)
+    plt.yticks(range(len(hidden_sizes)), hidden_sizes)
+    
+    # Add text annotations
+    for i in range(len(hidden_sizes)):
+        for j in range(len(num_layers)):
+            if not np.isnan(final_val_losses[i, j]):
+                plt.text(j, i, f'{final_val_losses[i, j]:.4f}', 
+                        ha='center', va='center', color='white', fontweight='bold')
     
     # 4. Best validation loss comparison
-    plt.subplot(2, 2, 4)
-    best_val_losses = [successful_results[s]['best_val_loss'] for s in sizes]
-    epochs_trained = [successful_results[s]['epochs_trained'] for s in sizes]
+    plt.subplot(2, 3, 4)
+    best_val_losses = np.zeros((len(hidden_sizes), len(num_layers)))
+    best_val_losses.fill(np.nan)
     
-    bars = plt.bar(sizes, best_val_losses, alpha=0.7, color='skyblue', label='Best Val Loss')
-    plt.xlabel('Hidden Size')
-    plt.ylabel('Best Validation Loss')
-    plt.title('Best Validation Loss by Model Size')
-    plt.grid(True, alpha=0.3)
+    for i, hidden_size in enumerate(hidden_sizes):
+        for j, num_layer in enumerate(num_layers):
+            key = f"{hidden_size}_{num_layer}"
+            if key in successful_results:
+                best_val_losses[i, j] = successful_results[key]['best_val_loss']
     
-    # Add value labels on bars
-    for bar, loss in zip(bars, best_val_losses):
-        height = bar.get_height()
-        plt.text(bar.get_x() + bar.get_width()/2., height,
-                f'{loss:.4f}', ha='center', va='bottom')
+    im2 = plt.imshow(best_val_losses, cmap='plasma', aspect='auto')
+    plt.colorbar(im2, label='Best Validation Loss')
+    plt.xlabel('Number of Layers')
+    plt.ylabel('Hidden Size')
+    plt.title('Best Validation Loss Heatmap')
+    plt.xticks(range(len(num_layers)), num_layers)
+    plt.yticks(range(len(hidden_sizes)), hidden_sizes)
+    
+    # Add text annotations
+    for i in range(len(hidden_sizes)):
+        for j in range(len(num_layers)):
+            if not np.isnan(best_val_losses[i, j]):
+                plt.text(j, i, f'{best_val_losses[i, j]:.4f}', 
+                        ha='center', va='center', color='white', fontweight='bold')
+    
+    # 5. Epochs trained comparison
+    plt.subplot(2, 3, 5)
+    epochs_trained = np.zeros((len(hidden_sizes), len(num_layers)))
+    epochs_trained.fill(np.nan)
+    
+    for i, hidden_size in enumerate(hidden_sizes):
+        for j, num_layer in enumerate(num_layers):
+            key = f"{hidden_size}_{num_layer}"
+            if key in successful_results:
+                epochs_trained[i, j] = successful_results[key]['epochs_trained']
+    
+    im3 = plt.imshow(epochs_trained, cmap='coolwarm', aspect='auto')
+    plt.colorbar(im3, label='Epochs Trained')
+    plt.xlabel('Number of Layers')
+    plt.ylabel('Hidden Size')
+    plt.title('Epochs Trained Heatmap')
+    plt.xticks(range(len(num_layers)), num_layers)
+    plt.yticks(range(len(hidden_sizes)), hidden_sizes)
+    
+    # Add text annotations
+    for i in range(len(hidden_sizes)):
+        for j in range(len(num_layers)):
+            if not np.isnan(epochs_trained[i, j]):
+                plt.text(j, i, f'{int(epochs_trained[i, j])}', 
+                        ha='center', va='center', color='white', fontweight='bold')
+    
+    # 6. Model complexity comparison (hidden_size * num_layers)
+    plt.subplot(2, 3, 6)
+    model_complexity = np.zeros((len(hidden_sizes), len(num_layers)))
+    for i, hidden_size in enumerate(hidden_sizes):
+        for j, num_layer in enumerate(num_layers):
+            model_complexity[i, j] = hidden_size * num_layer
+    
+    im4 = plt.imshow(model_complexity, cmap='YlOrRd', aspect='auto')
+    plt.colorbar(im4, label='Model Complexity (h×l)')
+    plt.xlabel('Number of Layers')
+    plt.ylabel('Hidden Size')
+    plt.title('Model Complexity Heatmap')
+    plt.xticks(range(len(num_layers)), num_layers)
+    plt.yticks(range(len(hidden_sizes)), hidden_sizes)
+    
+    # Add text annotations
+    for i in range(len(hidden_sizes)):
+        for j in range(len(num_layers)):
+            plt.text(j, i, f'{int(model_complexity[i, j])}', 
+                    ha='center', va='center', color='white', fontweight='bold')
     
     plt.tight_layout()
     plt.savefig('model_size_comparison.png', dpi=300, bbox_inches='tight')
@@ -164,13 +244,15 @@ def create_comparison_plots(results, hidden_sizes):
     
     print("Comparison plots saved to 'model_size_comparison.png'")
 
-def save_results(results, hidden_sizes):
+def save_results(results, hidden_sizes, num_layers):
     """Save results to JSON file."""
     # Convert numpy arrays to lists for JSON serialization
     json_results = {}
-    for hidden_size, result in results.items():
+    for key, result in results.items():
         if 'error' not in result:
-            json_results[hidden_size] = {
+            json_results[key] = {
+                'hidden_size': result['hidden_size'],
+                'num_layers': result['num_layers'],
                 'final_train_loss': float(result['final_train_loss']),
                 'final_val_loss': float(result['final_val_loss']),
                 'final_test_loss': float(result['final_test_loss']),
@@ -178,12 +260,17 @@ def save_results(results, hidden_sizes):
                 'epochs_trained': result['epochs_trained']
             }
         else:
-            json_results[hidden_size] = {'error': result['error']}
+            json_results[key] = {
+                'hidden_size': result['hidden_size'],
+                'num_layers': result['num_layers'],
+                'error': result['error']
+            }
     
     # Add metadata
     json_results['metadata'] = {
         'timestamp': datetime.now().isoformat(),
         'hidden_sizes_tested': hidden_sizes,
+        'num_layers_tested': num_layers,
         'input_dim': results.get('input_dim', 'unknown'),
         'output_dim': results.get('output_dim', 'unknown')
     }
@@ -193,7 +280,7 @@ def save_results(results, hidden_sizes):
     
     print("Results saved to 'model_size_results.json'")
 
-def print_summary(results, hidden_sizes):
+def print_summary(results, hidden_sizes, num_layers):
     """Print a summary of all results."""
     print(f"\n{'='*60}")
     print("MODEL SIZE COMPARISON SUMMARY")
@@ -208,32 +295,37 @@ def print_summary(results, hidden_sizes):
     # Find best model
     best_model = min(successful_results.items(), key=lambda x: x[1]['best_val_loss'])
     
-    print(f"\nBest performing model: Hidden size {best_model[0]}")
+    print(f"\nBest performing model: Hidden size {best_model[1]['hidden_size']}, Layers {best_model[1]['num_layers']}")
     print(f"Best validation loss: {best_model[1]['best_val_loss']:.6f}")
     print(f"Final validation loss: {best_model[1]['final_val_loss']:.6f}")
     print(f"Epochs trained: {best_model[1]['epochs_trained']}")
     
     print(f"\nDetailed Results:")
-    print(f"{'Hidden Size':<12} {'Best Val Loss':<15} {'Final Val Loss':<15} {'Epochs':<8}")
-    print("-" * 55)
+    print(f"{'Hidden Size':<12} {'Layers':<8} {'Best Val Loss':<15} {'Final Val Loss':<15} {'Epochs':<8}")
+    print("-" * 70)
     
     for hidden_size in hidden_sizes:
-        if hidden_size in successful_results:
-            result = successful_results[hidden_size]
-            print(f"{hidden_size:<12} {result['best_val_loss']:<15.6f} {result['final_val_loss']:<15.6f} {result['epochs_trained']:<8}")
-        else:
-            print(f"{hidden_size:<12} {'ERROR':<15} {'ERROR':<15} {'ERROR':<8}")
+        for num_layer in num_layers:
+            key = f"{hidden_size}_{num_layer}"
+            if key in successful_results:
+                result = successful_results[key]
+                print(f"{result['hidden_size']:<12} {result['num_layers']:<8} {result['best_val_loss']:<15.6f} {result['final_val_loss']:<15.6f} {result['epochs_trained']:<8}")
+            else:
+                print(f"{hidden_size:<12} {num_layer:<8} {'ERROR':<15} {'ERROR':<15} {'ERROR':<8}")
     
     print(f"\nFiles generated:")
     print("- model_size_comparison.png (comparison plots)")
     print("- model_size_results.json (detailed results)")
     for hidden_size in hidden_sizes:
-        if hidden_size in successful_results:
-            print(f"- model_{hidden_size}_loss_curve.png")
-            print(f"- model_{hidden_size}_predictions.png")
-            print(f"- model_{hidden_size}_best_model.pth")
+        for num_layer in num_layers:
+            key = f"{hidden_size}_{num_layer}"
+            if key in successful_results:
+                print(f"- model_{hidden_size}_layers_{num_layer}_loss_curve.png")
+                print(f"- model_{hidden_size}_layers_{num_layer}_predictions.png")
+                print(f"- model_{hidden_size}_layers_{num_layer}_best_model.pth")
 
 if __name__ == "__main__":
     # Test the specified model sizes
-    hidden_sizes = [128, 256, 512, 1024]
-    results = test_model_sizes(hidden_sizes) 
+    hidden_sizes = [128, 1024, 2048]
+    num_layers = [4, 8, 16]
+    results = test_model_sizes(hidden_sizes, num_layers) 
