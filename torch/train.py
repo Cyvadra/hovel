@@ -1,12 +1,11 @@
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import DataLoader, TensorDataset, random_split
 import numpy as np
 import matplotlib.pyplot as plt
 import h5py
 import os
-from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts, ReduceLROnPlateau
+from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
 from torch.nn import functional as F
 import warnings
 from torch.cuda.amp import GradScaler, autocast
@@ -16,29 +15,22 @@ from collections import defaultdict
 warnings.filterwarnings('ignore')
 
 # --- Logging Setup ---
-def setup_logging(model_name="improved_model"):
+def setup_logging(model_name="optimized_model"):
     """Setup logging configuration."""
-    # Create a logger specific to this model
     logger = logging.getLogger(f"training_{model_name}")
     logger.setLevel(logging.INFO)
-    
-    # Clear any existing handlers to avoid duplicates
     logger.handlers.clear()
     
-    # Create formatter
     formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
     
-    # Create file handler
     file_handler = logging.FileHandler(f'{model_name}_training.log')
     file_handler.setLevel(logging.INFO)
     file_handler.setFormatter(formatter)
     
-    # Create console handler
     console_handler = logging.StreamHandler()
     console_handler.setLevel(logging.INFO)
     console_handler.setFormatter(formatter)
     
-    # Add handlers to logger
     logger.addHandler(file_handler)
     logger.addHandler(console_handler)
     
@@ -87,8 +79,8 @@ class TrainingMetrics:
         logger.info(f"  Final learning rate: {self.metrics['learning_rate'][-1]:.2e}")
 
 # --- Configuration Management ---
-class TrainingConfig:
-    """Centralized configuration for training parameters."""
+class OptimizedTrainingConfig:
+    """Optimized configuration for training parameters."""
     
     def __init__(self):
         # Model parameters
@@ -96,8 +88,8 @@ class TrainingConfig:
         self.num_layers = 4
         self.dropout_rate = 0.1
         
-        # Training parameters
-        self.batch_size = 64
+        # Training parameters - optimized for speed
+        self.batch_size = 128  # Increased for better GPU utilization
         self.learning_rate = 1e-3
         self.weight_decay = 1e-4
         self.max_epochs = 300
@@ -107,7 +99,6 @@ class TrainingConfig:
         # Data parameters
         self.val_split = 0.1
         self.test_split = 0.1
-        self.num_workers = 4
         
         # Loss parameters
         self.mse_weight = 0.7
@@ -133,27 +124,19 @@ class TrainingConfig:
             else:
                 print(f"Warning: Unknown config parameter '{key}'")
 
-# --- 1. Data Loading and Preprocessing ---
-def clear_gpu_memory():
-    """Clear GPU memory and garbage collect."""
-    if torch.cuda.is_available():
-        # Show memory usage before clearing
-        allocated = torch.cuda.memory_allocated() / 1024**3
-        cached = torch.cuda.memory_reserved() / 1024**3
-        print(f"GPU memory before clearing: {allocated:.2f}GB allocated, {cached:.2f}GB cached")
-        
-        # Clear memory cache
-        torch.cuda.empty_cache()
-        torch.cuda.synchronize()
-        
-        # Show memory usage after clearing
-        allocated = torch.cuda.memory_allocated() / 1024**3
-        cached = torch.cuda.memory_reserved() / 1024**3
-        print(f"GPU memory after clearing: {allocated:.2f}GB allocated, {cached:.2f}GB cached")
+# --- GPU Setup and Memory Management ---
+def setup_gpu():
+    """Setup GPU and check availability."""
+    if not torch.cuda.is_available():
+        raise SystemError("GPU not found. This script requires a ROCm-enabled or CUDA-enabled GPU.")
     
-    # Force garbage collection
-    import gc
-    gc.collect()
+    device = torch.device("cuda")
+    print(f"Using GPU device: {torch.cuda.get_device_name(0)}")
+    
+    # Set memory fraction to avoid OOM
+    torch.cuda.set_per_process_memory_fraction(0.9)
+    
+    return device
 
 def show_gpu_memory_usage():
     """Show current GPU memory usage."""
@@ -162,33 +145,25 @@ def show_gpu_memory_usage():
         cached = torch.cuda.memory_reserved() / 1024**3
         total = torch.cuda.get_device_properties(0).total_memory / 1024**3
         print(f"GPU Memory: {allocated:.2f}GB allocated, {cached:.2f}GB cached, {total:.2f}GB total")
-    else:
-        print("CUDA not available")
 
-def load_state_dict_safely(file_path, device):
-    """
-    Load state dict safely, handling both DataParallel and non-DataParallel saved models.
-    
-    Args:
-        file_path (str): Path to the saved model file.
-        device (torch.device): Device to load the model on.
+def clear_gpu_memory():
+    """Clear GPU memory and garbage collect."""
+    if torch.cuda.is_available():
+        allocated = torch.cuda.memory_allocated() / 1024**3
+        cached = torch.cuda.memory_reserved() / 1024**3
+        print(f"GPU memory before clearing: {allocated:.2f}GB allocated, {cached:.2f}GB cached")
         
-    Returns:
-        dict: Cleaned state dict ready for loading.
-    """
-    state_dict = torch.load(file_path, map_location=device)
+        torch.cuda.empty_cache()
+        torch.cuda.synchronize()
+        
+        allocated = torch.cuda.memory_allocated() / 1024**3
+        cached = torch.cuda.memory_reserved() / 1024**3
+        print(f"GPU memory after clearing: {allocated:.2f}GB allocated, {cached:.2f}GB cached")
     
-    # Handle DataParallel saved models (remove 'module.' prefix)
-    new_state_dict = {}
-    for key, value in state_dict.items():
-        if key.startswith('module.'):
-            new_key = key[7:]  # Remove 'module.' prefix
-            new_state_dict[new_key] = value
-        else:
-            new_state_dict[key] = value
-    
-    return new_state_dict
+    import gc
+    gc.collect()
 
+# --- Data Loading and Preprocessing ---
 def load_and_preprocess_data(file_path='training_data.h5'):
     """
     Load and preprocess data with improved normalization and validation.
@@ -226,16 +201,55 @@ def load_and_preprocess_data(file_path='training_data.h5'):
         
     return X, Y
 
-# --- 2. Improved Model Definition ---
-class ImprovedModel(nn.Module):
+def prepare_optimized_data(X, Y, batch_size, val_split=0.1, test_split=0.1, device=None):
     """
-    An improved neural network with modern best practices:
-    - Residual connections
-    - Layer normalization
-    - Dropout for regularization
-    - GELU activation (better than SiLU for deep networks)
-    - Proper initialization
-    - Output format: 3*output_dim (p1, p2, p3 for each output dimension)
+    Prepare data in the optimized single-tensor format for maximum speed.
+    This creates all data on GPU at once and uses slicing for batches.
+    """
+    if device is None:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    
+    # Convert to tensors and move to GPU
+    X_tensor = torch.from_numpy(X).float().to(device)
+    Y_tensor = torch.from_numpy(Y).float().to(device)
+    
+    # Calculate split sizes
+    total_size = len(X_tensor)
+    test_size = int(test_split * total_size)
+    val_size = int(val_split * total_size)
+    train_size = total_size - test_size - val_size
+    
+    # Create indices for splits
+    indices = torch.randperm(total_size)
+    train_indices = indices[:train_size]
+    val_indices = indices[train_size:train_size + val_size]
+    test_indices = indices[train_size + val_size:]
+    
+    # Split data using indices
+    X_train = X_tensor[train_indices]
+    Y_train = Y_tensor[train_indices]
+    X_val = X_tensor[val_indices]
+    Y_val = Y_tensor[val_indices]
+    X_test = X_tensor[test_indices]
+    Y_test = Y_tensor[test_indices]
+    
+    print(f"Optimized data split - Train: {train_size}, Val: {val_size}, Test: {test_size}")
+    print(f"All data tensors on GPU: {device}")
+    
+    return {
+        'train': (X_train, Y_train),
+        'val': (X_val, Y_val),
+        'test': (X_test, Y_test),
+        'batch_size': batch_size,
+        'num_train_batches': train_size // batch_size,
+        'num_val_batches': val_size // batch_size,
+        'num_test_batches': test_size // batch_size
+    }
+
+# --- Optimized Model Definition ---
+class OptimizedModel(nn.Module):
+    """
+    Optimized neural network with modern best practices and speed optimizations.
     """
     def __init__(self, input_dim, output_dim, hidden_size=512, num_layers=4, dropout_rate=0.1):
         super().__init__()
@@ -283,10 +297,6 @@ class ImprovedModel(nn.Module):
 
         Returns:
             torch.Tensor: Output tensor of shape (batch_size, 3*output_dim)
-                         For each output dimension i, we have:
-                         - p1_i: weight parameter ∈ [-1,1]
-                         - p2_i: negative prediction
-                         - p3_i: positive prediction
         """
         # Input projection
         x = self.input_proj(x)
@@ -303,73 +313,7 @@ class ImprovedModel(nn.Module):
         
         return x
 
-# --- 3. Improved Training Setup ---
-def setup_training(X, Y, batch_size=32, val_split=0.1, test_split=0.1, num_workers=4):
-    """
-    Prepares PyTorch DataLoaders with proper train/val/test split.
-
-    Args:
-        X (np.ndarray): Input features.
-        Y (np.ndarray): Target values.
-        batch_size (int): Size of batches for data loaders.
-        val_split (float): Fraction of data for validation.
-        test_split (float): Fraction of data for testing.
-        num_workers (int): Number of workers for data loading.
-
-    Returns:
-        tuple: train_loader, val_loader, test_loader
-    """
-    # Convert numpy arrays to PyTorch tensors, ensuring float32 type
-    X_tensor = torch.from_numpy(X).float()
-    Y_tensor = torch.from_numpy(Y).float()
-    
-    # Create a TensorDataset from the tensors
-    dataset = TensorDataset(X_tensor, Y_tensor)
-    
-    # Calculate split sizes
-    total_size = len(dataset)
-    test_size = int(test_split * total_size)
-    val_size = int(val_split * total_size)
-    train_size = total_size - test_size - val_size
-    
-    # Split the dataset
-    train_set, val_set, test_set = random_split(
-        dataset, [train_size, val_size, test_size],
-        generator=torch.Generator().manual_seed(42)
-    )
-    
-    # Create data loaders with improved settings
-    train_loader = DataLoader(
-        train_set, 
-        batch_size=batch_size, 
-        shuffle=True, 
-        pin_memory=True,
-        num_workers=num_workers,
-        persistent_workers=True if num_workers > 0 else False
-    )
-    val_loader = DataLoader(
-        val_set, 
-        batch_size=batch_size, 
-        shuffle=False, 
-        pin_memory=True,
-        num_workers=num_workers,
-        persistent_workers=True if num_workers > 0 else False
-    )
-    test_loader = DataLoader(
-        test_set, 
-        batch_size=batch_size, 
-        shuffle=False, 
-        pin_memory=True,
-        num_workers=num_workers,
-        persistent_workers=True if num_workers > 0 else False
-    )
-    
-    print(f"Dataset split - Train: {train_size}, Val: {val_size}, Test: {test_size}")
-    print(f"Data loading with {num_workers} workers")
-    
-    return train_loader, val_loader, test_loader
-
-# --- 4. Improved Loss Functions ---
+# --- Optimized Loss Functions ---
 class HuberLoss(nn.Module):
     """
     Huber loss combines the best properties of L1 and L2 loss.
@@ -386,32 +330,9 @@ class HuberLoss(nn.Module):
         linear = abs_error - quadratic
         return torch.mean(0.5 * quadratic**2 + self.delta * linear)
 
-class CombinedLoss(nn.Module):
-    """
-    Combined loss function using MSE and Huber loss.
-    """
-    def __init__(self, mse_weight=0.7, huber_weight=0.3, huber_delta=1.0):
-        super().__init__()
-        self.mse_weight = mse_weight
-        self.huber_weight = huber_weight
-        self.mse_loss = nn.MSELoss()
-        self.huber_loss = HuberLoss(delta=huber_delta)
-    
-    def forward(self, pred, target):
-        mse = self.mse_loss(pred, target)
-        huber = self.huber_loss(pred, target)
-        return self.mse_weight * mse + self.huber_weight * huber
-
 class WeightedCombinedLoss(nn.Module):
     """
     Weighted combined loss function for 3*output_dim model outputs.
-    
-    For each output dimension i:
-    - p1_i: weight parameter ∈ [-1,1] (controls which prediction to trust more)
-    - p2_i: negative prediction (should be < 0)
-    - p3_i: positive prediction (should be > 0)
-    
-    Loss formula: abs(p1-1)/2 * ori_loss(p2,y) + abs(p1+1)/2 * ori_loss(p3,y)
     """
     def __init__(self, output_dim, mse_weight=0.7, huber_weight=0.3, huber_delta=1.0):
         super().__init__()
@@ -434,7 +355,6 @@ class WeightedCombinedLoss(nn.Module):
         batch_size = pred.shape[0]
         
         # Reshape predictions to separate p1, p2, p3 for each output dimension
-        # pred shape: (batch_size, 3*output_dim) -> (batch_size, output_dim, 3)
         pred_reshaped = pred.view(batch_size, self.output_dim, 3)
         
         # Extract p1, p2, p3 for each output dimension
@@ -443,17 +363,13 @@ class WeightedCombinedLoss(nn.Module):
         p3 = pred_reshaped[:, :, 2]  # positive predictions
         
         # Calculate weights based on p1
-        # Clamp p1 to [-1, 1] range to ensure weights sum to 1
         p1_clamped = torch.clamp(p1, -1.0, 1.0)
-        
-        # When p1 < 0: weight_p2 = abs(p1-1)/2 = (1-p1)/2 (higher weight for p2)
-        # When p1 > 0: weight_p3 = abs(p1+1)/2 = (1+p1)/2 (higher weight for p3)
-        weight_p2 = torch.abs(p1_clamped - 1) / 2  # weight for p2 (negative prediction)
-        weight_p3 = torch.abs(p1_clamped + 1) / 2  # weight for p3 (positive prediction)
+        weight_p2 = torch.abs(p1_clamped - 1) / 2
+        weight_p3 = torch.abs(p1_clamped + 1) / 2
         
         # Calculate individual losses for p2 and p3
-        loss_p2 = self.mse_loss(p2, target)  # shape: (batch_size, output_dim)
-        loss_p3 = self.mse_loss(p3, target)  # shape: (batch_size, output_dim)
+        loss_p2 = self.mse_loss(p2, target)
+        loss_p3 = self.mse_loss(p3, target)
         
         # Apply weights and combine losses
         weighted_loss = weight_p2 * loss_p2 + weight_p3 * loss_p3
@@ -478,45 +394,34 @@ class WeightedCombinedLoss(nn.Module):
         
         return final_loss
 
-# --- 5. Improved Training Function ---
-def train_model(train_loader, val_loader, test_loader, input_dim, output_dim, 
-                hidden_size=512, num_layers=4, dropout_rate=0.1, model_name="improved_model",
-                enable_early_stop=True, fixed_epochs=300, config=None):
+# --- Optimized Training Function ---
+def train_model_optimized(data_dict, input_dim, output_dim, 
+                         hidden_size=512, num_layers=4, dropout_rate=0.1, 
+                         model_name="optimized_model", config=None):
     """
-    Improved training function with modern best practices:
-    - Better learning rate scheduling
-    - Early stopping with patience (optional)
-    - Gradient clipping
-    - Mixed precision training
-    - Better monitoring and logging
-    - Configuration management
-    
-    Args:
-        enable_early_stop (bool): If True, use early stopping logic. If False, train for fixed_epochs.
-        fixed_epochs (int): Number of epochs to train when early stopping is disabled.
-        config (TrainingConfig): Configuration object. If None, uses default config.
+    Optimized training function using single large tensors on GPU for maximum speed.
+    Based on the fast reference code approach.
     """
     # Use provided config or create default
     if config is None:
-        config = TrainingConfig()
+        config = OptimizedTrainingConfig()
         config.update(
             hidden_size=hidden_size,
             num_layers=num_layers,
-            dropout_rate=dropout_rate,
-            max_epochs=fixed_epochs if not enable_early_stop else 300
+            dropout_rate=dropout_rate
         )
     
     # Setup logging
     logger = setup_logging(model_name)
     metrics = TrainingMetrics()
     
-    # Determine the device to use
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    # Setup GPU
+    device = setup_gpu()
     logger.info(f"Using device: {device}")
     show_gpu_memory_usage()
     
     # Create model
-    model = ImprovedModel(input_dim, output_dim, config.hidden_size, config.num_layers, config.dropout_rate)
+    model = OptimizedModel(input_dim, output_dim, config.hidden_size, config.num_layers, config.dropout_rate)
     
     # Create model-specific file names
     best_model_path = f'{model_name}_best_model.pth'
@@ -525,7 +430,15 @@ def train_model(train_loader, val_loader, test_loader, input_dim, output_dim,
     if os.path.exists(best_model_path):
         logger.info(f"Found '{best_model_path}'. Loading pre-trained model state.")
         try:
-            new_state_dict = load_state_dict_safely(best_model_path, device)
+            state_dict = torch.load(best_model_path, map_location=device)
+            # Handle DataParallel saved models
+            new_state_dict = {}
+            for key, value in state_dict.items():
+                if key.startswith('module.'):
+                    new_key = key[7:]  # Remove 'module.' prefix
+                    new_state_dict[new_key] = value
+                else:
+                    new_state_dict[key] = value
             model.load_state_dict(new_state_dict)
             logger.info("Successfully loaded pre-trained model state.")
         except RuntimeError as e:
@@ -540,7 +453,7 @@ def train_model(train_loader, val_loader, test_loader, input_dim, output_dim,
         model = nn.DataParallel(model)
     model.to(device)
     
-    # Improved optimizer: AdamW with better hyperparameters
+    # Optimizer
     optimizer = optim.AdamW(
         model.parameters(), 
         lr=config.learning_rate,
@@ -549,7 +462,7 @@ def train_model(train_loader, val_loader, test_loader, input_dim, output_dim,
         eps=1e-8
     )
     
-    # Improved learning rate scheduler: Cosine annealing with warm restarts
+    # Learning rate scheduler
     scheduler = CosineAnnealingWarmRestarts(
         optimizer,
         T_0=config.scheduler_t0,
@@ -557,7 +470,7 @@ def train_model(train_loader, val_loader, test_loader, input_dim, output_dim,
         eta_min=config.scheduler_eta_min
     )
     
-    # Use weighted combined loss function for 3*output_dim model
+    # Loss function
     criterion = WeightedCombinedLoss(
         output_dim, 
         mse_weight=config.mse_weight, 
@@ -568,68 +481,70 @@ def train_model(train_loader, val_loader, test_loader, input_dim, output_dim,
     # Mixed precision setup
     scaler = GradScaler() if config.use_mixed_precision else None
     
+    # Extract data
+    X_train, Y_train = data_dict['train']
+    X_val, Y_val = data_dict['val']
+    X_test, Y_test = data_dict['test']
+    batch_size = data_dict['batch_size']
+    num_train_batches = data_dict['num_train_batches']
+    num_val_batches = data_dict['num_val_batches']
+    num_test_batches = data_dict['num_test_batches']
+    
     # Training parameters
     best_val_loss = float('inf')
     patience_counter = 0
     train_losses = []
     val_losses = []
     
-    # Training loop
-    num_epochs = config.max_epochs
-    if enable_early_stop:
-        logger.info(f"Training with early stopping enabled (max {num_epochs} epochs, patience: {config.patience})")
-    else:
-        logger.info(f"Training for fixed {num_epochs} epochs (early stopping disabled)")
+    logger.info(f"Starting optimized training for {config.max_epochs} epochs...")
+    logger.info(f"Batch size: {batch_size}, Train batches: {num_train_batches}, Val batches: {num_val_batches}")
     
     try:
-        for epoch in range(num_epochs):
+        for epoch in range(config.max_epochs):
+            epoch_start_time = time.time()
+            
             # Training phase
             model.train()
             epoch_train_loss = 0
-            num_batches = 0
             
-            for batch_idx, (inputs, targets) in enumerate(train_loader):
-                try:
-                    inputs, targets = inputs.to(device), targets.to(device)
-                    
-                    optimizer.zero_grad()
-                    
-                    if config.use_mixed_precision and scaler is not None:
-                        with autocast():
-                            outputs = model(inputs)
-                            loss = criterion(outputs, targets)
-                        
-                        scaler.scale(loss).backward()
-                        scaler.unscale_(optimizer)
-                        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=config.gradient_clip_norm)
-                        scaler.step(optimizer)
-                        scaler.update()
-                    else:
+            for i in range(num_train_batches):
+                optimizer.zero_grad()
+                
+                # Slice the data from the single large tensor - this is extremely fast
+                start_idx = i * batch_size
+                end_idx = start_idx + batch_size
+                inputs = X_train[start_idx:end_idx]
+                targets = Y_train[start_idx:end_idx]
+                
+                if config.use_mixed_precision and scaler is not None:
+                    with autocast():
                         outputs = model(inputs)
                         loss = criterion(outputs, targets)
-                        loss.backward()
-                        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=config.gradient_clip_norm)
-                        optimizer.step()
                     
-                    epoch_train_loss += loss.item()
-                    num_batches += 1
-                    
-                except RuntimeError as e:
-                    if "out of memory" in str(e):
-                        logger.error(f"GPU OOM at batch {batch_idx}. Clearing memory and skipping batch.")
-                        clear_gpu_memory()
-                        continue
-                    else:
-                        raise e
+                    scaler.scale(loss).backward()
+                    scaler.unscale_(optimizer)
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=config.gradient_clip_norm)
+                    scaler.step(optimizer)
+                    scaler.update()
+                else:
+                    outputs = model(inputs)
+                    loss = criterion(outputs, targets)
+                    loss.backward()
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=config.gradient_clip_norm)
+                    optimizer.step()
+                
+                epoch_train_loss += loss.item()
             
             # Validation phase
             model.eval()
             epoch_val_loss = 0
-            val_batches = 0
             
             with torch.no_grad():
-                for inputs, targets in val_loader:
-                    inputs, targets = inputs.to(device), targets.to(device)
+                for i in range(num_val_batches):
+                    start_idx = i * batch_size
+                    end_idx = start_idx + batch_size
+                    inputs = X_val[start_idx:end_idx]
+                    targets = Y_val[start_idx:end_idx]
                     
                     if config.use_mixed_precision and scaler is not None:
                         with autocast():
@@ -640,11 +555,10 @@ def train_model(train_loader, val_loader, test_loader, input_dim, output_dim,
                         loss = criterion(outputs, targets)
                     
                     epoch_val_loss += loss.item()
-                    val_batches += 1
             
             # Calculate average losses
-            avg_train_loss = epoch_train_loss / num_batches
-            avg_val_loss = epoch_val_loss / val_batches
+            avg_train_loss = epoch_train_loss / num_train_batches
+            avg_val_loss = epoch_val_loss / num_val_batches
             
             train_losses.append(avg_train_loss)
             val_losses.append(avg_val_loss)
@@ -656,20 +570,29 @@ def train_model(train_loader, val_loader, test_loader, input_dim, output_dim,
             # Update metrics
             metrics.update(epoch + 1, avg_train_loss, avg_val_loss, current_lr)
             
-            logger.info(f"Epoch {epoch+1:3d}: "
+            # We must synchronize the GPU before stopping the timer for an accurate measurement
+            torch.cuda.synchronize()
+            epoch_end_time = time.time()
+            epoch_time = epoch_end_time - epoch_start_time
+            
+            logger.info(f"Epoch [{epoch+1:3d}/{config.max_epochs}]: "
                       f"Train Loss: {avg_train_loss:.6f}, "
                       f"Val Loss: {avg_val_loss:.6f}, "
-                      f"LR: {current_lr:.2e}")
+                      f"LR: {current_lr:.2e}, "
+                      f"Time: {epoch_time:.2f}s")
             
             # Early stopping and model saving
             if avg_val_loss < best_val_loss:
                 best_val_loss = avg_val_loss
                 patience_counter = 0
-                torch.save(model.state_dict(), best_model_path)
-                logger.info(f"  -> New best model saved! Val Loss: {best_val_loss:.6f}")
+                if epoch > 100:
+                    torch.save(model.state_dict(), best_model_path)
+                    logger.info(f"  -> New best model saved! Val Loss: {best_val_loss:.6f}")
+                else:
+                    logger.info(f"  -> New best model! Val Loss: {best_val_loss:.6f}")
             else:
                 patience_counter += 1
-                if enable_early_stop and patience_counter >= config.patience:
+                if patience_counter >= config.patience:
                     logger.info(f"  -> Early stopping triggered after {config.patience} epochs without improvement")
                     break
             
@@ -681,17 +604,26 @@ def train_model(train_loader, val_loader, test_loader, input_dim, output_dim,
         
         # Load the best model for final evaluation
         logger.info("Loading the best model state for final evaluation.")
-        new_state_dict = load_state_dict_safely(best_model_path, device)
+        state_dict = torch.load(best_model_path, map_location=device)
+        new_state_dict = {}
+        for key, value in state_dict.items():
+            if key.startswith('module.'):
+                new_key = key[7:]
+                new_state_dict[new_key] = value
+            else:
+                new_state_dict[key] = value
         model.load_state_dict(new_state_dict)
         
         # Final evaluation on test set
         model.eval()
         test_loss = 0
-        test_batches = 0
         
         with torch.no_grad():
-            for inputs, targets in test_loader:
-                inputs, targets = inputs.to(device), targets.to(device)
+            for i in range(num_test_batches):
+                start_idx = i * batch_size
+                end_idx = start_idx + batch_size
+                inputs = X_test[start_idx:end_idx]
+                targets = Y_test[start_idx:end_idx]
                 
                 if config.use_mixed_precision and scaler is not None:
                     with autocast():
@@ -702,9 +634,8 @@ def train_model(train_loader, val_loader, test_loader, input_dim, output_dim,
                     loss = criterion(outputs, targets)
                 
                 test_loss += loss.item()
-                test_batches += 1
         
-        final_test_loss = test_loss / test_batches
+        final_test_loss = test_loss / num_test_batches
         logger.info(f"Final Test Loss: {final_test_loss:.6f}")
         
         # Log training summary
@@ -720,65 +651,10 @@ def train_model(train_loader, val_loader, test_loader, input_dim, output_dim,
         logger.error(f"Training failed with error: {e}")
         raise e
 
-# --- 6. Improved Plotting Functions ---
-def check_existing_plots(model_name):
-    """Check if plots for a specific model already exist."""
-    plot_files = [
-        f"{model_name}_loss_analysis.png",
-        f"{model_name}_predictions.png"
-    ]
-    
-    all_exist = all(os.path.exists(f) for f in plot_files)
-    if all_exist:
-        print(f"Plots for {model_name} already exist, skipping...")
-    return all_exist
-
-def check_existing_model_files(model_name):
-    """Check if model files for a specific model already exist."""
-    model_file = f"{model_name}_best_model.pth"
-    exists = os.path.exists(model_file)
-    if exists:
-        print(f"Model file for {model_name} already exists, skipping...")
-    return exists
-
-def save_training_config(config, model_name):
-    """Save training configuration to a JSON file."""
-    import json
-    
-    config_dict = {key: value for key, value in config.__dict__.items() 
-                   if not key.startswith('_')}
-    
-    config_file = f"{model_name}_config.json"
-    with open(config_file, 'w') as f:
-        json.dump(config_dict, f, indent=2)
-    
-    print(f"Configuration saved to {config_file}")
-
-def load_training_config(model_name):
-    """Load training configuration from a JSON file."""
-    import json
-    
-    config_file = f"{model_name}_config.json"
-    if not os.path.exists(config_file):
-        return None
-    
-    with open(config_file, 'r') as f:
-        config_dict = json.load(f)
-    
-    config = TrainingConfig()
-    config.update(**config_dict)
-    return config
-
+# --- Utility Functions ---
 def extract_final_predictions(model_output, output_dim):
     """
     Extract final predictions from 3*output_dim model output.
-    
-    Args:
-        model_output (torch.Tensor): Model output of shape (batch_size, 3*output_dim)
-        output_dim (int): Original output dimension
-    
-    Returns:
-        torch.Tensor: Final predictions of shape (batch_size, output_dim)
     """
     batch_size = model_output.shape[0]
     
@@ -800,15 +676,15 @@ def extract_final_predictions(model_output, output_dim):
     
     return final_predictions
 
-def plot_losses(train_losses, val_losses, model_name="improved_model"):
+def plot_losses(train_losses, val_losses, model_name="optimized_model"):
     """
     Enhanced plotting with better visualization.
     """
-    # Remove first 40 elements if length is bigger than 200
+    # Remove first 100 elements if length is bigger than 200
     if len(train_losses) > 200:
-        train_losses = train_losses[40:]
+        train_losses = train_losses[100:]
     if len(val_losses) > 200:
-        val_losses = val_losses[40:]
+        val_losses = val_losses[100:]
     
     plt.figure(figsize=(12, 8))
     
@@ -859,78 +735,24 @@ def plot_losses(train_losses, val_losses, model_name="improved_model"):
     plt.savefig(f'{model_name}_loss_analysis.png', dpi=300, bbox_inches='tight')
     plt.close()
 
-def plot_predictions(model, val_loader, output_dim, stride=10, model_name="improved_model"):
-    """
-    Enhanced prediction plotting with confidence intervals and statistics.
-    """
-    device = next(model.parameters()).device
-    model.eval()
+def save_training_config(config, model_name):
+    """Save training configuration to a JSON file."""
+    import json
     
-    all_targets = []
-    all_outputs = []
+    config_dict = {key: value for key, value in config.__dict__.items() 
+                   if not key.startswith('_')}
     
-    with torch.no_grad():
-        for inputs, targets in val_loader:
-            inputs = inputs.to(device)
-            raw_outputs = model(inputs)
-            # Extract final predictions from 3*output_dim output
-            final_outputs = extract_final_predictions(raw_outputs, output_dim).cpu().numpy()
-            all_outputs.append(final_outputs)
-            all_targets.append(targets.numpy())
+    config_file = f"{model_name}_config.json"
+    with open(config_file, 'w') as f:
+        json.dump(config_dict, f, indent=2)
     
-    all_targets = np.vstack(all_targets)
-    all_outputs = np.vstack(all_outputs)
-    
-    # Downsample for visualization
-    indices = np.arange(0, len(all_targets), stride)
-    downsampled_targets = all_targets[indices]
-    downsampled_outputs = all_outputs[indices]
-    
-    # Calculate metrics
-    mse = np.mean((all_targets - all_outputs) ** 2, axis=0)
-    mae = np.mean(np.abs(all_targets - all_outputs), axis=0)
-    r2_scores = []
-    for i in range(all_targets.shape[1]):
-        ss_res = np.sum((all_targets[:, i] - all_outputs[:, i]) ** 2)
-        ss_tot = np.sum((all_targets[:, i] - np.mean(all_targets[:, i])) ** 2)
-        r2 = 1 - (ss_res / ss_tot) if ss_tot != 0 else 0
-        r2_scores.append(r2)
-    
-    plt.figure(figsize=(16, 12))
-    
-    # Plot predictions for up to 6 output dimensions
-    num_outputs = min(6, all_targets.shape[1])
-    for i in range(num_outputs):
-        plt.subplot(num_outputs, 2, 2*i + 1)
-        plt.plot(downsampled_targets[:, i], 'b-', label='Actual', alpha=0.8, linewidth=1)
-        plt.plot(downsampled_outputs[:, i], 'r--', label='Predicted', alpha=0.8, linewidth=1)
-        plt.ylabel(f'Y_{i+1}')
-        plt.title(f'Output {i+1} - MSE: {mse[i]:.4f}, MAE: {mae[i]:.4f}, R²: {r2_scores[i]:.4f}')
-        plt.legend()
-        plt.grid(True, alpha=0.3)
-        
-        # Scatter plot
-        plt.subplot(num_outputs, 2, 2*i + 2)
-        plt.scatter(all_targets[:, i], all_outputs[:, i], alpha=0.5, s=1)
-        plt.plot([all_targets[:, i].min(), all_targets[:, i].max()], 
-                [all_targets[:, i].min(), all_targets[:, i].max()], 'r--', alpha=0.8)
-        plt.xlabel('Actual')
-        plt.ylabel('Predicted')
-        plt.title(f'Scatter Plot - Output {i+1}')
-        plt.grid(True, alpha=0.3)
-    
-    plt.tight_layout()
-    plt.savefig(f'{model_name}_predictions.png', dpi=300, bbox_inches='tight')
-    plt.close()
-    
-    # Print summary statistics
-    print(f"\nPrediction Summary:")
-    print(f"Average MSE: {np.mean(mse):.6f}")
-    print(f"Average MAE: {np.mean(mae):.6f}")
-    print(f"Average R²: {np.mean(r2_scores):.6f}")
+    print(f"Configuration saved to {config_file}")
 
 # --- Main Execution ---
 if __name__ == "__main__":
+    print("Starting Optimized PyTorch Training")
+    print("=" * 60)
+    
     # Load and prepare data
     X, Y = load_and_preprocess_data()
     
@@ -939,12 +761,12 @@ if __name__ == "__main__":
     output_dim = Y.shape[1]
     
     # Create configuration
-    config = TrainingConfig()
+    config = OptimizedTrainingConfig()
     config.update(
         hidden_size=512,
         num_layers=4,
         dropout_rate=0.1,
-        batch_size=64,
+        batch_size=128,  # Optimized batch size
         use_mixed_precision=True
     )
     
@@ -958,39 +780,39 @@ if __name__ == "__main__":
     print(f"  Batch size: {config.batch_size}")
     print(f"  Mixed precision: {config.use_mixed_precision}")
     
-    # Setup data loaders
-    train_loader, val_loader, test_loader = setup_training(
+    # Setup GPU
+    device = setup_gpu()
+    
+    # Prepare optimized data
+    data_dict = prepare_optimized_data(
         X, Y, 
         batch_size=config.batch_size,
         val_split=config.val_split,
         test_split=config.test_split,
-        num_workers=config.num_workers
+        device=device
     )
     
     # Train the model
-    model, train_losses, val_losses, test_loss = train_model(
-        train_loader, val_loader, test_loader, input_dim, output_dim,
-        model_name="improved_model",
-        enable_early_stop=True,
+    model, train_losses, val_losses, test_loss = train_model_optimized(
+        data_dict, input_dim, output_dim,
+        model_name="optimized_model",
         config=config
     )
     
     # Save configuration
-    save_training_config(config, "improved_model")
+    save_training_config(config, "optimized_model")
     
     # Plot results
     plot_losses(train_losses, val_losses)
-    plot_predictions(model, val_loader, output_dim)
 
-    print("\nTraining complete!")
+    print("\nOptimized training complete!")
     print("Files saved:")
-    print("  - improved_model_best_model.pth (best model)")
-    print("  - improved_model_config.json (configuration)")
-    print("  - improved_model_training.log (training log)")
-    print("  - improved_model_loss_analysis.png (loss curves)")
-    print("  - improved_model_predictions.png (predictions)")
+    print("  - optimized_model_best_model.pth (best model)")
+    print("  - optimized_model_config.json (configuration)")
+    print("  - optimized_model_training.log (training log)")
+    print("  - optimized_model_loss_analysis.png (loss curves)")
     if test_loss is not None:
         print(f"  - Final test loss: {test_loss:.6f}")
     
     # Clear GPU memory
-    clear_gpu_memory()
+    clear_gpu_memory() 
