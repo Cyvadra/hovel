@@ -102,7 +102,7 @@ def test_model_sizes(hidden_sizes=[1536, 1024, 512, 128], num_layers=[16, 8, 4, 
     output_dim = Y.shape[1]
     
     # Setup data loaders (same for all models)
-    train_loader, val_loader, test_loader = setup_training(X, Y, batch_size=32)
+    train_loader, val_loader, test_loader = setup_training(X, Y, batch_size=24)
     
     # Store results for comparison
     results = {}
@@ -129,7 +129,7 @@ def test_model_sizes(hidden_sizes=[1536, 1024, 512, 128], num_layers=[16, 8, 4, 
                 model, train_losses, val_losses, test_loss = train_model(
                     train_loader, val_loader, test_loader, input_dim, output_dim, 
                     hidden_size=hidden_size, num_layers=num_layer, model_name=model_name,
-                    enable_early_stop=False, fixed_epochs=300
+                    enable_early_stop=False, fixed_epochs=360
                 )
                 
                 # Plot results
@@ -322,7 +322,7 @@ def create_comparison_plots(results, hidden_sizes, num_layers):
                     ha='center', va='center', color='white', fontweight='bold')
     
     plt.tight_layout()
-    plt.savefig('model_size_comparison.png', dpi=300, bbox_inches='tight')
+    plt.savefig('model_size_comparison.png', dpi=360, bbox_inches='tight')
     plt.close()
     
     print("Comparison plots saved to 'model_size_comparison.png'")
