@@ -11,8 +11,15 @@ import json
 from datetime import datetime
 import gc
 
-# Import functions from the original train.py
-from train import load_and_preprocess_data, setup_training, train_model, plot_losses, plot_predictions
+# Import functions from the new optimized train.py
+from train import (
+    load_and_preprocess_data, 
+    prepare_optimized_data, 
+    train_model_optimized, 
+    plot_losses, 
+    OptimizedTrainingConfig,
+    extract_final_predictions
+)
 
 def clear_gpu_memory():
     """Clear GPU memory and garbage collect."""
@@ -80,6 +87,62 @@ def show_gpu_memory_usage():
     else:
         print("CUDA not available")
 
+def plot_predictions(model, data_dict, output_dim, model_name="model"):
+    """
+    Plot predictions vs actual values for validation data.
+    
+    Args:
+        model: Trained model
+        data_dict: Data dictionary from prepare_optimized_data
+        output_dim: Original output dimension
+        model_name: Name for saving the plot
+    """
+    model.eval()
+    device = next(model.parameters()).device
+    
+    # Get validation data
+    X_val, Y_val = data_dict['val']
+    
+    # Make predictions
+    with torch.no_grad():
+        predictions = model(X_val)
+        # Extract final predictions (p3 values)
+        predictions = extract_final_predictions(predictions, output_dim)
+    
+    # Convert to numpy for plotting
+    predictions = predictions.cpu().numpy()
+    actual = Y_val.cpu().numpy()
+    
+    # Create subplots for each output dimension
+    num_outputs = min(output_dim, 6)  # Limit to 6 for readability
+    fig, axes = plt.subplots(2, 3, figsize=(15, 10))
+    axes = axes.flatten()
+    
+    for i in range(num_outputs):
+        ax = axes[i]
+        ax.scatter(actual[:, i], predictions[:, i], alpha=0.6, s=20)
+        ax.plot([actual[:, i].min(), actual[:, i].max()], 
+                [actual[:, i].min(), actual[:, i].max()], 'r--', lw=2)
+        ax.set_xlabel(f'Actual Y{i+1}')
+        ax.set_ylabel(f'Predicted Y{i+1}')
+        ax.set_title(f'Y{i+1}: Predictions vs Actual')
+        ax.grid(True, alpha=0.3)
+        
+        # Calculate R² score
+        correlation = np.corrcoef(actual[:, i], predictions[:, i])[0, 1]
+        ax.text(0.05, 0.95, f'R² = {correlation:.3f}', 
+                transform=ax.transAxes, bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
+    
+    # Hide unused subplots
+    for i in range(num_outputs, len(axes)):
+        axes[i].set_visible(False)
+    
+    plt.tight_layout()
+    plt.savefig(f'{model_name}_predictions.png', dpi=300, bbox_inches='tight')
+    plt.close()
+    
+    print(f"Predictions plot saved to '{model_name}_predictions.png'")
+
 def test_model_sizes(hidden_sizes=[1536, 1024, 512, 128], num_layers=[16, 8, 4, 2]):
     """
     Test different model sizes and save all results.
@@ -101,8 +164,9 @@ def test_model_sizes(hidden_sizes=[1536, 1024, 512, 128], num_layers=[16, 8, 4, 
     input_dim = X.shape[1]
     output_dim = Y.shape[1]
     
-    # Setup data loaders (same for all models)
-    train_loader, val_loader, test_loader = setup_training(X, Y, batch_size=24)
+    # Setup data preparation (same for all models)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    data_dict = prepare_optimized_data(X, Y, batch_size=24, device=device)
     
     # Store results for comparison
     results = {}
@@ -125,16 +189,26 @@ def test_model_sizes(hidden_sizes=[1536, 1024, 512, 128], num_layers=[16, 8, 4, 
                 continue
             
             try:
+                # Create configuration for this model
+                config = OptimizedTrainingConfig()
+                config.update(
+                    hidden_size=hidden_size,
+                    num_layers=num_layer,
+                    batch_size=24,
+                    max_epochs=360,
+                    patience=360  # No early stopping
+                )
+                
                 # Train the model
-                model, train_losses, val_losses, test_loss = train_model(
-                    train_loader, val_loader, test_loader, input_dim, output_dim, 
+                model, train_losses, val_losses, test_loss = train_model_optimized(
+                    data_dict, input_dim, output_dim,
                     hidden_size=hidden_size, num_layers=num_layer, model_name=model_name,
-                    enable_early_stop=False, fixed_epochs=360
+                    config=config
                 )
                 
                 # Plot results
                 plot_losses(train_losses, val_losses, model_name)
-                plot_predictions(model, val_loader, output_dim, model_name=model_name)
+                plot_predictions(model, data_dict, output_dim, model_name=model_name)
                 
                 # Store results
                 key = f"{hidden_size}_{num_layer}"
