@@ -114,8 +114,8 @@ def plot_predictions(model, data_dict, output_dim, model_name="model"):
     actual = Y_val.cpu().numpy()
     
     # Create subplots for each output dimension
-    num_outputs = min(output_dim, 6)  # Limit to 6 for readability
-    fig, axes = plt.subplots(2, 3, figsize=(15, 10))
+    num_outputs = min(output_dim, 24)  # Limit to 24 for readability
+    fig, axes = plt.subplots(6, 4, figsize=(15, 10))
     axes = axes.flatten()
     
     for i in range(num_outputs):
