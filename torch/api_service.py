@@ -282,11 +282,7 @@ async def lifespan(app: FastAPI):
     
     # Startup
     logger.info("Starting API service...")
-    if model_manager:
-        success = model_manager.load_model()
-        if not success:
-            logger.error("Failed to load model during startup")
-            sys.exit(1)
+    # Note: model_manager will be initialized in main() before the server starts
     
     yield
     
@@ -466,8 +462,9 @@ def main():
     logger.info(f"Model loaded from: {args.model_path}")
     logger.info(f"API documentation available at: http://{args.host}:{args.port}/docs")
     
+    # Start the server with the app instance
     uvicorn.run(
-        "api_service:app",
+        app,
         host=args.host,
         port=args.port,
         reload=args.reload,
