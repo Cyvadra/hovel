@@ -20,7 +20,8 @@ from train import (
     train_model_optimized, 
     plot_losses, 
     OptimizedTrainingConfig,
-    extract_final_predictions
+    extract_final_predictions,
+    OptimizedModel
 )
 
 def clear_gpu_memory():
@@ -182,7 +183,23 @@ def regenerate_all_plots(hidden_sizes=[1536, 1024, 512, 128], num_layers=[16, 8,
                 
                 try:
                     # Load the trained model
-                    model = torch.load(model_file, map_location=device)
+                    state_dict = torch.load(model_file, map_location=device)
+                    
+                    # Create model instance with the same architecture
+                    # Extract hidden_size and num_layers from model name
+                    parts = model_name.split('_')
+                    hidden_size = int(parts[1])  # model_1024_layers_4 -> 1024
+                    num_layers = int(parts[3])   # model_1024_layers_4 -> 4
+                    
+                    print(f"Creating model with hidden_size={hidden_size}, num_layers={num_layers}")
+                    print(f"Input dim: {input_dim}, Output dim: {output_dim}")
+                    
+                    # Create model with same architecture
+                    model = OptimizedModel(input_dim, output_dim, hidden_size, num_layers)
+                    
+                    # Load state dictionary
+                    model.load_state_dict(state_dict)
+                    model.to(device)
                     model.eval()
                     
                     # Load loss data if available
@@ -269,7 +286,23 @@ def regenerate_plots_by_pattern(pattern="model_*_layers_*_best_model.pth"):
         
         try:
             # Load the trained model
-            model = torch.load(model_file, map_location=device)
+            state_dict = torch.load(model_file, map_location=device)
+            
+            # Create model instance with the same architecture
+            # Extract hidden_size and num_layers from model name
+            parts = model_name.split('_')
+            hidden_size = int(parts[1])  # model_1024_layers_4 -> 1024
+            num_layers = int(parts[3])   # model_1024_layers_4 -> 4
+            
+            print(f"Creating model with hidden_size={hidden_size}, num_layers={num_layers}")
+            print(f"Input dim: {input_dim}, Output dim: {output_dim}")
+            
+            # Create model with same architecture
+            model = OptimizedModel(input_dim, output_dim, hidden_size, num_layers)
+            
+            # Load state dictionary
+            model.load_state_dict(state_dict)
+            model.to(device)
             model.eval()
             
             # Load loss data if available
