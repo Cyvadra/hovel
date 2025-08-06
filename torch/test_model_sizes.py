@@ -10,6 +10,8 @@ from torch.optim.lr_scheduler import ReduceLROnPlateau
 import json
 from datetime import datetime
 import gc
+import argparse
+import glob
 
 # Import functions from the new optimized train.py
 from train import (
@@ -143,6 +145,214 @@ def plot_predictions(model, data_dict, output_dim, model_name="model"):
     
     print(f"Predictions plot saved to '{model_name}_predictions.png'")
 
+def regenerate_all_plots(hidden_sizes=[1536, 1024, 512, 128], num_layers=[16, 8, 4, 2]):
+    """
+    Regenerate plots for all existing models without retraining.
+    
+    Args:
+        hidden_sizes (list): List of hidden layer sizes to check.
+        num_layers (list): List of number of layers to check.
+    """
+    print("Regenerating plots for all existing models...")
+    print(f"Checking hidden sizes: {hidden_sizes}")
+    print(f"Checking number of layers: {num_layers}")
+    
+    # Load and prepare data (same for all models)
+    X, Y = load_and_preprocess_data()
+    input_dim = X.shape[1]
+    output_dim = Y.shape[1]
+    
+    # Setup data preparation
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    data_dict = prepare_optimized_data(X, Y, batch_size=24, device=device)
+    
+    # Track which models were processed
+    processed_models = []
+    skipped_models = []
+    
+    for hidden_size in hidden_sizes:
+        for num_layer in num_layers:
+            model_name = f"model_{hidden_size}_layers_{num_layer}"
+            model_file = f"{model_name}_best_model.pth"
+            
+            if os.path.exists(model_file):
+                print(f"\n{'='*50}")
+                print(f"Regenerating plots for: {model_name}")
+                print(f"{'='*50}")
+                
+                try:
+                    # Load the trained model
+                    model = torch.load(model_file, map_location=device)
+                    model.eval()
+                    
+                    # Load loss data if available
+                    train_losses, val_losses = load_loss_data(model_name)
+                    
+                    # Regenerate plots
+                    if train_losses is not None and val_losses is not None:
+                        plot_losses(train_losses, val_losses, model_name)
+                    else:
+                        print(f"No loss data found for {model_name}, skipping loss plot")
+                    
+                    plot_predictions(model, data_dict, output_dim, model_name=model_name)
+                    
+                    processed_models.append(model_name)
+                    print(f"Successfully regenerated plots for {model_name}")
+                    
+                except Exception as e:
+                    print(f"Error regenerating plots for {model_name}: {e}")
+                    skipped_models.append(model_name)
+            else:
+                print(f"Model file not found: {model_file}")
+                skipped_models.append(model_name)
+    
+    # Print summary
+    print(f"\n{'='*60}")
+    print("PLOT REGENERATION SUMMARY")
+    print(f"{'='*60}")
+    print(f"Successfully processed: {len(processed_models)} models")
+    print(f"Skipped/Failed: {len(skipped_models)} models")
+    
+    if processed_models:
+        print(f"\nSuccessfully regenerated plots for:")
+        for model in processed_models:
+            print(f"  - {model}")
+    
+    if skipped_models:
+        print(f"\nSkipped/Failed models:")
+        for model in skipped_models:
+            print(f"  - {model}")
+    
+    return processed_models, skipped_models
+
+def regenerate_plots_by_pattern(pattern="model_*_layers_*_best_model.pth"):
+    """
+    Regenerate plots for all models matching a specific pattern.
+    
+    Args:
+        pattern (str): Glob pattern to match model files
+    """
+    print(f"Regenerating plots for models matching pattern: {pattern}")
+    
+    # Find all matching model files
+    model_files = glob.glob(pattern)
+    
+    if not model_files:
+        print(f"No model files found matching pattern: {pattern}")
+        return [], []
+    
+    print(f"Found {len(model_files)} model files:")
+    for file in model_files:
+        print(f"  - {file}")
+    
+    # Load and prepare data
+    X, Y = load_and_preprocess_data()
+    input_dim = X.shape[1]
+    output_dim = Y.shape[1]
+    
+    # Setup data preparation
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    data_dict = prepare_optimized_data(X, Y, batch_size=24, device=device)
+    
+    # Track which models were processed
+    processed_models = []
+    skipped_models = []
+    
+    for model_file in model_files:
+        # Extract model name from file path
+        model_name = os.path.splitext(os.path.basename(model_file))[0].replace("_best_model", "")
+        
+        print(f"\n{'='*50}")
+        print(f"Regenerating plots for: {model_name}")
+        print(f"Model file: {model_file}")
+        print(f"{'='*50}")
+        
+        try:
+            # Load the trained model
+            model = torch.load(model_file, map_location=device)
+            model.eval()
+            
+            # Load loss data if available
+            train_losses, val_losses = load_loss_data(model_name)
+            
+            # Regenerate plots
+            if train_losses is not None and val_losses is not None:
+                plot_losses(train_losses, val_losses, model_name)
+            else:
+                print(f"No loss data found for {model_name}, skipping loss plot")
+            
+            plot_predictions(model, data_dict, output_dim, model_name=model_name)
+            
+            processed_models.append(model_name)
+            print(f"Successfully regenerated plots for {model_name}")
+            
+        except Exception as e:
+            print(f"Error regenerating plots for {model_name}: {e}")
+            skipped_models.append(model_name)
+    
+    # Print summary
+    print(f"\n{'='*60}")
+    print("PLOT REGENERATION SUMMARY")
+    print(f"{'='*60}")
+    print(f"Successfully processed: {len(processed_models)} models")
+    print(f"Skipped/Failed: {len(skipped_models)} models")
+    
+    if processed_models:
+        print(f"\nSuccessfully regenerated plots for:")
+        for model in processed_models:
+            print(f"  - {model}")
+    
+    if skipped_models:
+        print(f"\nSkipped/Failed models:")
+        for model in skipped_models:
+            print(f"  - {model}")
+    
+    return processed_models, skipped_models
+
+def save_loss_data(train_losses, val_losses, model_name):
+    """
+    Save training and validation loss data to a JSON file.
+    
+    Args:
+        train_losses (list): Training loss history
+        val_losses (list): Validation loss history
+        model_name (str): Name of the model
+    """
+    loss_data = {
+        'train_losses': train_losses,
+        'val_losses': val_losses,
+        'timestamp': datetime.now().isoformat()
+    }
+    
+    loss_file = f"{model_name}_loss_data.json"
+    with open(loss_file, 'w') as f:
+        json.dump(loss_data, f, indent=2)
+    
+    print(f"Loss data saved to '{loss_file}'")
+
+def load_loss_data(model_name):
+    """
+    Load training and validation loss data from a JSON file.
+    
+    Args:
+        model_name (str): Name of the model
+        
+    Returns:
+        tuple: (train_losses, val_losses) or (None, None) if file doesn't exist
+    """
+    loss_file = f"{model_name}_loss_data.json"
+    
+    if os.path.exists(loss_file):
+        try:
+            with open(loss_file, 'r') as f:
+                loss_data = json.load(f)
+            return loss_data['train_losses'], loss_data['val_losses']
+        except Exception as e:
+            print(f"Error loading loss data for {model_name}: {e}")
+            return None, None
+    else:
+        return None, None
+
 def test_model_sizes(hidden_sizes=[1536, 1024, 512, 128], num_layers=[16, 8, 4, 2]):
     """
     Test different model sizes and save all results.
@@ -205,6 +415,9 @@ def test_model_sizes(hidden_sizes=[1536, 1024, 512, 128], num_layers=[16, 8, 4, 
                     hidden_size=hidden_size, num_layers=num_layer, model_name=model_name,
                     config=config
                 )
+                
+                # Save loss data
+                save_loss_data(train_losses, val_losses, model_name)
                 
                 # Plot results
                 plot_losses(train_losses, val_losses, model_name)
@@ -482,7 +695,34 @@ def print_summary(results, hidden_sizes, num_layers):
                 print(f"- model_{hidden_size}_layers_{num_layer}_best_model.pth")
 
 if __name__ == "__main__":
-    # Test the specified model sizes
-    hidden_sizes = [1024, 256]
-    num_layers = [16, 4]
-    results = test_model_sizes(hidden_sizes, num_layers) 
+    # Set up command line argument parsing
+    parser = argparse.ArgumentParser(description='Test different model sizes and regenerate plots')
+    parser.add_argument('--regenerate-plots', action='store_true', 
+                       help='Regenerate plots for all existing models without retraining')
+    parser.add_argument('--regenerate-pattern', type=str, default="model_*_layers_*_best_model.pth",
+                       help='Glob pattern to match model files for plot regeneration')
+    parser.add_argument('--hidden-sizes', nargs='+', type=int, default=[1024, 256],
+                       help='List of hidden layer sizes to test')
+    parser.add_argument('--num-layers', nargs='+', type=int, default=[16, 4],
+                       help='List of number of layers to test')
+    parser.add_argument('--plot-only', action='store_true',
+                       help='Only regenerate plots, do not train new models')
+    
+    args = parser.parse_args()
+    
+    if args.regenerate_plots or args.plot_only:
+        # Regenerate plots for existing models
+        if args.plot_only:
+            print("Plot-only mode: Regenerating plots for all existing models...")
+            processed, skipped = regenerate_plots_by_pattern(args.regenerate_pattern)
+        else:
+            print("Regenerating plots for specified model sizes...")
+            processed, skipped = regenerate_all_plots(args.hidden_sizes, args.num_layers)
+        
+        if not args.plot_only:
+            print("\nContinuing with normal training after plot regeneration...")
+            results = test_model_sizes(args.hidden_sizes, args.num_layers)
+    else:
+        # Normal training mode
+        print("Starting normal model training...")
+        results = test_model_sizes(args.hidden_sizes, args.num_layers) 
