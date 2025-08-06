@@ -13,6 +13,7 @@ import argparse
 import logging
 import sys
 import os
+import re
 from typing import List, Dict, Any, Optional
 import numpy as np
 import torch
@@ -53,6 +54,8 @@ class ModelManager:
         self.model = None
         self.input_dim = None
         self.output_dim = None
+        self.hidden_size = None
+        self.num_layers = None
         self.is_loaded = False
         
     def _setup_device(self, device: str) -> torch.device:
@@ -70,10 +73,62 @@ class ModelManager:
         
         return device
     
+    def _parse_model_params_from_filename(self, filename: str) -> tuple:
+        """
+        Parse hidden_size and num_layers from filename.
+        
+        Expected format: model_{hidden_size}_layers_{num_layers}_best_model.pth
+        Examples:
+        - model_1024_layers_16_best_model.pth -> (1024, 16)
+        - model_512_layers_4_best_model.pth -> (512, 4)
+        - optimized_model_best_model.pth -> (512, 4) [default]
+        
+        Returns:
+            tuple: (hidden_size, num_layers)
+        """
+        # Default values
+        default_hidden_size = 512
+        default_num_layers = 4
+        
+        # Extract filename without path
+        basename = os.path.basename(filename)
+        
+        # Pattern to match: model_{hidden_size}_layers_{num_layers}_best_model.pth
+        pattern = r'model_(\d+)_layers_(\d+)_best_model\.pth'
+        match = re.search(pattern, basename)
+        
+        if match:
+            hidden_size = int(match.group(1))
+            num_layers = int(match.group(2))
+            logger.info(f"Parsed from filename: hidden_size={hidden_size}, num_layers={num_layers}")
+            return hidden_size, num_layers
+        else:
+            # Try alternative patterns
+            patterns = [
+                r'model_(\d+)_(\d+)_best_model\.pth',  # model_1024_16_best_model.pth
+                r'model_(\d+)_layers_(\d+)\.pth',      # model_1024_layers_16.pth
+                r'model_(\d+)_(\d+)\.pth',             # model_1024_16.pth
+            ]
+            
+            for pattern in patterns:
+                match = re.search(pattern, basename)
+                if match:
+                    hidden_size = int(match.group(1))
+                    num_layers = int(match.group(2))
+                    logger.info(f"Parsed from filename (alt pattern): hidden_size={hidden_size}, num_layers={num_layers}")
+                    return hidden_size, num_layers
+            
+            # If no pattern matches, use defaults
+            logger.info(f"Could not parse model parameters from filename '{basename}', using defaults: hidden_size={default_hidden_size}, num_layers={default_num_layers}")
+            return default_hidden_size, default_num_layers
+    
     def load_model(self) -> bool:
         """Load the model from the specified path."""
         try:
             logger.info(f"Loading model from: {self.model_path}")
+            
+            # Parse model parameters from filename
+            self.hidden_size, self.num_layers = self._parse_model_params_from_filename(self.model_path)
             
             # Load the model state
             state_dict = torch.load(self.model_path, map_location=self.device)
@@ -83,7 +138,7 @@ class ModelManager:
             for key, value in state_dict.items():
                 if key.startswith('module.'):
                     new_key = key[7:]  # Remove 'module.' prefix
-                    new_state_dict[new_key] = value
+                    new_state_dict[key] = value
                 else:
                     new_state_dict[key] = value
             
@@ -105,12 +160,12 @@ class ModelManager:
                 self.output_dim = 1
                 logger.warning("Could not infer output_dim from model, using default: 1")
             
-            # Create the model
+            # Create the model with parsed parameters
             self.model = OptimizedModel(
                 input_dim=self.input_dim,
                 output_dim=self.output_dim,
-                hidden_size=512,
-                num_layers=4,
+                hidden_size=self.hidden_size,
+                num_layers=self.num_layers,
                 dropout_rate=0.1
             )
             
@@ -123,6 +178,8 @@ class ModelManager:
             logger.info(f"Model loaded successfully!")
             logger.info(f"Input dimension: {self.input_dim}")
             logger.info(f"Output dimension: {self.output_dim}")
+            logger.info(f"Hidden size: {self.hidden_size}")
+            logger.info(f"Number of layers: {self.num_layers}")
             logger.info(f"Model output dimension: {3 * self.output_dim}")
             
             return True
@@ -179,6 +236,8 @@ class ModelManager:
             "device": str(self.device),
             "input_dim": self.input_dim,
             "output_dim": self.output_dim,
+            "hidden_size": self.hidden_size,
+            "num_layers": self.num_layers,
             "model_output_dim": 3 * self.output_dim if self.output_dim else None,
             "parameters": sum(p.numel() for p in self.model.parameters()) if self.model else 0
         }

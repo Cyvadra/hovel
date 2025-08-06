@@ -106,6 +106,16 @@ This will:
 4. Make predictions
 5. Test different batch sizes
 
+### Testing Filename Parsing
+
+Test the filename parsing functionality:
+
+```bash
+python test_filename_parsing.py
+```
+
+This will test various filename formats to ensure the parsing works correctly.
+
 ### Example API Usage with curl
 
 ```bash
@@ -159,9 +169,36 @@ The API service expects a model file that:
 3. Has the correct input and output dimensions
 
 The service will automatically:
+- **Parse model parameters from filename** (hidden_size and num_layers)
 - Detect the input and output dimensions from the model weights
 - Handle DataParallel models (removes 'module.' prefix)
 - Load the model on the specified device (GPU/CPU)
+
+### Filename Parsing
+
+The API service automatically extracts `hidden_size` and `num_layers` from the model filename. Supported formats:
+
+#### Primary Format
+```
+model_{hidden_size}_layers_{num_layers}_best_model.pth
+```
+
+#### Alternative Formats
+```
+model_{hidden_size}_{num_layers}_best_model.pth
+model_{hidden_size}_layers_{num_layers}.pth
+model_{hidden_size}_{num_layers}.pth
+```
+
+#### Examples
+- `model_1024_layers_16_best_model.pth` → hidden_size=1024, num_layers=16
+- `model_512_layers_4_best_model.pth` → hidden_size=512, num_layers=4
+- `model_256_8_best_model.pth` → hidden_size=256, num_layers=8
+
+#### Default Values
+If the filename doesn't match any pattern, the service uses:
+- hidden_size = 512
+- num_layers = 4
 
 ## Error Handling
 
