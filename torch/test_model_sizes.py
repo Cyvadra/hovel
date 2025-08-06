@@ -438,8 +438,8 @@ def test_model_sizes(hidden_sizes=[1536, 1024, 512, 128], num_layers=[16, 8, 4, 
                     hidden_size=hidden_size,
                     num_layers=num_layer,
                     batch_size=24,
-                    max_epochs=360,
-                    patience=360  # No early stopping
+                    max_epochs=580,
+                    patience=580  # No early stopping
                 )
                 
                 # Train the model
@@ -734,9 +734,9 @@ if __name__ == "__main__":
                        help='Regenerate plots for all existing models without retraining')
     parser.add_argument('--regenerate-pattern', type=str, default="model_*_layers_*_best_model.pth",
                        help='Glob pattern to match model files for plot regeneration')
-    parser.add_argument('--hidden-sizes', nargs='+', type=int, default=[1024, 256],
+    parser.add_argument('--hidden-sizes', nargs='+', type=int, default=[2048, 1536],
                        help='List of hidden layer sizes to test')
-    parser.add_argument('--num-layers', nargs='+', type=int, default=[16, 4],
+    parser.add_argument('--num-layers', nargs='+', type=int, default=[24, 16, 12],
                        help='List of number of layers to test')
     parser.add_argument('--plot-only', action='store_true',
                        help='Only regenerate plots, do not train new models')
