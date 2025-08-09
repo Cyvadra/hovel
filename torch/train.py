@@ -459,6 +459,8 @@ def train_model_optimized(data_dict, input_dim, output_dim,
     Optimized training function using single large tensors on GPU for maximum speed.
     Based on the fast reference code approach.
     """
+    best_model_path = f'{model_name}_best_model.pth'
+
     # Use provided config or create default
     if config is None:
         config = OptimizedTrainingConfig()
@@ -546,7 +548,6 @@ def train_model_optimized(data_dict, input_dim, output_dim,
             val_losses = []
     else:
         # Check for best model file (old format)
-        best_model_path = f'{model_name}_best_model.pth'
         if os.path.exists(best_model_path):
             logger.info(f"Found '{best_model_path}'. Loading pre-trained model state.")
             try:
@@ -687,6 +688,7 @@ def train_model_optimized(data_dict, input_dim, output_dim,
                     patience_counter, train_losses, val_losses, scaler, model_name
                 )
                 logger.info(f"  -> Checkpoint saved for epoch {epoch + 1}")
+                torch.save(model.state_dict(), best_model_path)
         
         # Load the best model for final evaluation
         logger.info("Loading the best model state for final evaluation.")
