@@ -81,6 +81,7 @@ class ModelManager:
         Examples:
         - model_1024_layers_16_best_model.pth -> (1024, 16)
         - model_512_layers_4_best_model.pth -> (512, 4)
+        - model_256_layers_4_checkpoint_epoch_100.pth -> (256, 4)
         - optimized_model_best_model.pth -> (512, 4) [default]
         
         Returns:
@@ -94,7 +95,7 @@ class ModelManager:
         basename = os.path.basename(filename)
         
         # Pattern to match: model_{hidden_size}_layers_{num_layers}_best_model.pth
-        pattern = r'model_(\d+)_layers_(\d+)_best_model\.pth'
+        pattern = r'model_(\d+)_layers_(\d+)_(best_model|checkpoint_epoch_\d+)\.pth'
         match = re.search(pattern, basename)
         
         if match:
@@ -105,7 +106,7 @@ class ModelManager:
         else:
             # Try alternative patterns
             patterns = [
-                r'model_(\d+)_(\d+)_best_model\.pth',  # model_1024_16_best_model.pth
+                r'model_(\d+)_layers_(\d+)_(best_model|checkpoint_epoch_\d+)\.pth',  # model_1024_16_best_model.pth
                 r'model_(\d+)_layers_(\d+)\.pth',      # model_1024_layers_16.pth
                 r'model_(\d+)_(\d+)\.pth',             # model_1024_16.pth
             ]
