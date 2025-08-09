@@ -748,8 +748,16 @@ def plot_losses(train_losses, val_losses, train_last_ts, val_last_ts, test_last_
     # Remove first 100 elements if length is bigger than 200
     if len(train_losses) > 200:
         train_losses = train_losses[100:]
+    elif len(train_losses) > 100:
+        train_losses = train_losses[:50]
+    elif len(train_losses) > 50:
+        train_losses = train_losses[:20]
     if len(val_losses) > 200:
         val_losses = val_losses[100:]
+    elif len(val_losses) > 100:
+        val_losses = val_losses[:50]
+    elif len(val_losses) > 50:
+        val_losses = val_losses[:20]
     
     plt.figure(figsize=(12, 8))
     
