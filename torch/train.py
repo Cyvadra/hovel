@@ -366,6 +366,9 @@ def prepare_optimized_data(X, Y, T, batch_size, val_split=0.05, test_split=0.05,
     Y_test = Y_tensor[test_indices]
     
     print(f"Optimized data split - Train: {train_size}, Val: {val_size}, Test: {test_size}")
+    print(f"Train last timestamp: {train_last_ts}")
+    print(f"Val last timestamp: {val_last_ts}")
+    print(f"Test last timestamp: {test_last_ts}")
     print(f"All data tensors on GPU: {device}")
     
     return {
