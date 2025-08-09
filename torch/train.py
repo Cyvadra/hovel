@@ -180,10 +180,12 @@ def load_and_preprocess_data(file_path='training_data.h5'):
             X = X.T
             Y = Y.T
             print(f"Transposed X shape: {X.shape}, Y shape: {Y.shape}")
+        assert X.shape[0] == Y.shape[0], "X and Y must have the same number of samples"
         if T.shape[0] != Y.shape[0]:
             print("Warning: T and Y have different number of samples. Attempting transpose.")
             T = T.T
             print(f"Transposed T shape: {T.shape}")
+        assert T.shape[0] == Y.shape[0], "T and Y must have the same number of samples"
 
         # Improved preprocessing: Standardize X and apply robust scaling to Y
         # Standardize X (zero mean, unit variance)
@@ -594,7 +596,10 @@ def train_model_optimized(data_dict, input_dim, output_dim,
                       f"Train Loss: {avg_train_loss:.6f}, "
                       f"Val Loss: {avg_val_loss:.6f}, "
                       f"LR: {current_lr:.2e}, "
-                      f"Time: {epoch_time:.2f}s")
+                      f"Time: {epoch_time:.2f}s, "
+                      f"ETA: {int(epoch_time * (config.max_epochs - epoch - 1) // 3600)}h "
+                      f"{int((epoch_time * (config.max_epochs - epoch - 1) % 3600) // 60)}m "
+                      f"{int((epoch_time * (config.max_epochs - epoch - 1) % 60))}s")
             
             # Early stopping and model saving
             if avg_val_loss < best_val_loss:
