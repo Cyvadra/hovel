@@ -5,6 +5,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import h5py
 import os
+import re
 from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
 from torch.nn import functional as F
 import warnings
@@ -13,6 +14,125 @@ import logging
 import time
 from collections import defaultdict
 warnings.filterwarnings('ignore')
+
+# --- Checkpoint Management ---
+def find_latest_checkpoint(model_name="optimized_model"):
+    """
+    Find the latest checkpoint file for the given model name.
+    
+    Args:
+        model_name (str): Base name of the model
+        
+    Returns:
+        tuple: (checkpoint_path, epoch_number) or (None, 0) if no checkpoint found
+    """
+    # Pattern to match checkpoint files: model_name_checkpoint_epoch_X.pth
+    pattern = re.compile(rf'{model_name}_checkpoint_epoch_(\d+)\.pth')
+    
+    latest_checkpoint = None
+    latest_epoch = 0
+    
+    # Search in current directory
+    for filename in os.listdir('.'):
+        match = pattern.match(filename)
+        if match:
+            epoch = int(match.group(1))
+            if epoch > latest_epoch:
+                latest_epoch = epoch
+                latest_checkpoint = filename
+    
+    if latest_checkpoint:
+        print(f"Found latest checkpoint: {latest_checkpoint} (epoch {latest_epoch})")
+        return latest_checkpoint, latest_epoch
+    else:
+        print("No checkpoint files found.")
+        return None, 0
+
+def load_checkpoint(checkpoint_path, model, optimizer, scheduler, device):
+    """
+    Load model and training state from checkpoint.
+    
+    Args:
+        checkpoint_path (str): Path to checkpoint file
+        model: The model to load state into
+        optimizer: The optimizer to load state into
+        scheduler: The scheduler to load state into
+        device: Device to load tensors on
+        
+    Returns:
+        dict: Training state including epoch, best_val_loss, patience_counter, etc.
+    """
+    print(f"Loading checkpoint from {checkpoint_path}")
+    
+    checkpoint = torch.load(checkpoint_path, map_location=device)
+    
+    # Load model state
+    if 'model_state_dict' in checkpoint:
+        # New format with training state
+        model.load_state_dict(checkpoint['model_state_dict'])
+        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+        
+        training_state = {
+            'epoch': checkpoint.get('epoch', 0),
+            'best_val_loss': checkpoint.get('best_val_loss', float('inf')),
+            'patience_counter': checkpoint.get('patience_counter', 0),
+            'train_losses': checkpoint.get('train_losses', []),
+            'val_losses': checkpoint.get('val_losses', []),
+            'scaler_state_dict': checkpoint.get('scaler_state_dict', None)
+        }
+        
+        print(f"Loaded training state from epoch {training_state['epoch']}")
+        print(f"Best validation loss: {training_state['best_val_loss']:.6f}")
+        
+    else:
+        # Old format - just model state dict
+        model.load_state_dict(checkpoint)
+        training_state = {
+            'epoch': 0,
+            'best_val_loss': float('inf'),
+            'patience_counter': 0,
+            'train_losses': [],
+            'val_losses': [],
+            'scaler_state_dict': None
+        }
+        print("Loaded model state only (old checkpoint format)")
+    
+    return training_state
+
+def save_checkpoint(model, optimizer, scheduler, epoch, best_val_loss, 
+                   patience_counter, train_losses, val_losses, scaler, 
+                   model_name="optimized_model"):
+    """
+    Save a complete checkpoint with model and training state.
+    
+    Args:
+        model: The model to save
+        optimizer: The optimizer to save
+        scheduler: The scheduler to save
+        epoch (int): Current epoch
+        best_val_loss (float): Best validation loss so far
+        patience_counter (int): Current patience counter
+        train_losses (list): List of training losses
+        val_losses (list): List of validation losses
+        scaler: GradScaler for mixed precision
+        model_name (str): Base name for the checkpoint file
+    """
+    checkpoint = {
+        'model_state_dict': model.state_dict(),
+        'optimizer_state_dict': optimizer.state_dict(),
+        'scheduler_state_dict': scheduler.state_dict(),
+        'epoch': epoch,
+        'best_val_loss': best_val_loss,
+        'patience_counter': patience_counter,
+        'train_losses': train_losses,
+        'val_losses': val_losses,
+        'scaler_state_dict': scaler.state_dict() if scaler is not None else None
+    }
+    
+    checkpoint_path = f'{model_name}_checkpoint_epoch_{epoch}.pth'
+    torch.save(checkpoint, checkpoint_path)
+    print(f"Checkpoint saved: {checkpoint_path}")
 
 # --- Logging Setup ---
 def setup_logging(model_name="optimized_model"):
@@ -360,30 +480,6 @@ def train_model_optimized(data_dict, input_dim, output_dim,
     # Create model
     model = OptimizedModel(input_dim, output_dim, config.hidden_size, config.num_layers, config.dropout_rate)
     
-    # Create model-specific file names
-    best_model_path = f'{model_name}_best_model.pth'
-    
-    # Load existing model if available
-    if os.path.exists(best_model_path):
-        logger.info(f"Found '{best_model_path}'. Loading pre-trained model state.")
-        try:
-            state_dict = torch.load(best_model_path, map_location=device)
-            # Handle DataParallel saved models
-            new_state_dict = {}
-            for key, value in state_dict.items():
-                if key.startswith('module.'):
-                    new_key = key[7:]  # Remove 'module.' prefix
-                    new_state_dict[new_key] = value
-                else:
-                    new_state_dict[key] = value
-            model.load_state_dict(new_state_dict)
-            logger.info("Successfully loaded pre-trained model state.")
-        except RuntimeError as e:
-            logger.warning(f"Could not load existing model state: {e}")
-            logger.info("Starting training from scratch.")
-    else:
-        logger.info(f"No '{best_model_path}' found. Starting training from scratch.")
-
     # Multi-GPU setup
     if torch.cuda.device_count() > 1:
         logger.info(f"Using {torch.cuda.device_count()} GPUs!")
@@ -415,6 +511,62 @@ def train_model_optimized(data_dict, input_dim, output_dim,
     # Mixed precision setup
     scaler = GradScaler() if config.use_mixed_precision else None
     
+    # Check for existing checkpoints and load if found
+    checkpoint_path, checkpoint_epoch = find_latest_checkpoint(model_name)
+    start_epoch = 0
+    best_val_loss = float('inf')
+    patience_counter = 0
+    train_losses = []
+    val_losses = []
+    
+    if checkpoint_path:
+        logger.info(f"Found checkpoint: {checkpoint_path}")
+        try:
+            training_state = load_checkpoint(checkpoint_path, model, optimizer, scheduler, device)
+            start_epoch = checkpoint_epoch + 1
+            best_val_loss = training_state['best_val_loss']
+            patience_counter = training_state['patience_counter']
+            train_losses = training_state['train_losses']
+            val_losses = training_state['val_losses']
+            
+            # Load scaler state if available
+            if training_state['scaler_state_dict'] and scaler is not None:
+                scaler.load_state_dict(training_state['scaler_state_dict'])
+            
+            logger.info(f"Resuming training from epoch {start_epoch + 1}")
+            logger.info(f"Previous best validation loss: {best_val_loss:.6f}")
+            
+        except Exception as e:
+            logger.warning(f"Failed to load checkpoint: {e}")
+            logger.info("Starting training from scratch.")
+            start_epoch = 0
+            best_val_loss = float('inf')
+            patience_counter = 0
+            train_losses = []
+            val_losses = []
+    else:
+        # Check for best model file (old format)
+        best_model_path = f'{model_name}_best_model.pth'
+        if os.path.exists(best_model_path):
+            logger.info(f"Found '{best_model_path}'. Loading pre-trained model state.")
+            try:
+                state_dict = torch.load(best_model_path, map_location=device)
+                # Handle DataParallel saved models
+                new_state_dict = {}
+                for key, value in state_dict.items():
+                    if key.startswith('module.'):
+                        new_key = key[7:]  # Remove 'module.' prefix
+                        new_state_dict[new_key] = value
+                    else:
+                        new_state_dict[key] = value
+                model.load_state_dict(new_state_dict)
+                logger.info("Successfully loaded pre-trained model state.")
+            except RuntimeError as e:
+                logger.warning(f"Could not load existing model state: {e}")
+                logger.info("Starting training from scratch.")
+        else:
+            logger.info("No checkpoint or best model found. Starting training from scratch.")
+    
     # Extract data
     X_train, Y_train = data_dict['train']
     X_val, Y_val = data_dict['val']
@@ -424,17 +576,12 @@ def train_model_optimized(data_dict, input_dim, output_dim,
     num_val_batches = data_dict['num_val_batches']
     num_test_batches = data_dict['num_test_batches']
     
-    # Training parameters
-    best_val_loss = float('inf')
-    patience_counter = 0
-    train_losses = []
-    val_losses = []
-    
     logger.info(f"Starting optimized training for {config.max_epochs} epochs...")
     logger.info(f"Batch size: {batch_size}, Train batches: {num_train_batches}, Val batches: {num_val_batches}")
+    logger.info(f"Starting from epoch {start_epoch + 1}")
     
     try:
-        for epoch in range(config.max_epochs):
+        for epoch in range(start_epoch, config.max_epochs):
             epoch_start_time = time.time()
             
             # Training phase
@@ -535,9 +682,11 @@ def train_model_optimized(data_dict, input_dim, output_dim,
             
             # Save checkpoint periodically
             if (epoch + 1) % config.save_checkpoint_every == 0:
-                checkpoint_path = f'{model_name}_checkpoint_epoch_{epoch+1}.pth'
-                torch.save(model.state_dict(), checkpoint_path)
-                logger.info(f"  -> Checkpoint saved to {checkpoint_path}")
+                save_checkpoint(
+                    model, optimizer, scheduler, epoch + 1, best_val_loss,
+                    patience_counter, train_losses, val_losses, scaler, model_name
+                )
+                logger.info(f"  -> Checkpoint saved for epoch {epoch + 1}")
         
         # Load the best model for final evaluation
         logger.info("Loading the best model state for final evaluation.")
