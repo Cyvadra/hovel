@@ -729,6 +729,9 @@ if __name__ == "__main__":
                        help='Regenerate plots for all existing models without retraining')
     parser.add_argument('--regenerate-pattern', type=str, default="model_*_layers_*_best_model.pth",
                        help='Glob pattern to match model files for plot regeneration')
+    # Example usage:
+    # python test_model_sizes.py --hidden-sizes 2048 256 128 --num-layers 12 8 4
+    # This will test models with hidden sizes [2048,256,128] and layers [12,8,4]
     parser.add_argument('--hidden-sizes', nargs='+', type=int, default=[2048, 256],
                        help='List of hidden layer sizes to test')
     parser.add_argument('--num-layers', nargs='+', type=int, default=[12],
