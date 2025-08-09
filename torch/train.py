@@ -232,7 +232,7 @@ class OptimizedTrainingConfig:
         self.use_mixed_precision = True
         
         # Model saving
-        self.save_checkpoint_every = 50
+        self.save_checkpoint_every = 20
     
     def update(self, **kwargs):
         """Update configuration with new parameters."""
@@ -673,11 +673,8 @@ def train_model_optimized(data_dict, input_dim, output_dim,
             if avg_val_loss < best_val_loss:
                 best_val_loss = avg_val_loss
                 patience_counter = 0
-                if epoch > 100:
-                    torch.save(model.state_dict(), best_model_path)
-                    logger.info(f"  -> New best model saved! Val Loss: {best_val_loss:.6f}")
-                else:
-                    logger.info(f"  -> New best model! Val Loss: {best_val_loss:.6f}")
+                torch.save(model.state_dict(), best_model_path)
+                logger.info(f"  -> New best model saved! Val Loss: {best_val_loss:.6f}")
             else:
                 patience_counter += 1
                 if patience_counter >= config.patience:
@@ -691,7 +688,7 @@ def train_model_optimized(data_dict, input_dim, output_dim,
                     patience_counter, train_losses, val_losses, scaler, model_name
                 )
                 logger.info(f"  -> Checkpoint saved for epoch {epoch + 1}")
-                torch.save(model.state_dict(), best_model_path)
+                plot_losses(train_losses, val_losses, data_dict['train_last_ts'], data_dict['val_last_ts'], data_dict['test_last_ts'], model_name)
         
         # Load the best model for final evaluation
         logger.info("Loading the best model state for final evaluation.")

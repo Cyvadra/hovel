@@ -378,7 +378,7 @@ def load_loss_data(model_name):
     else:
         return None, None
 
-def test_model_sizes(hidden_sizes=[1536, 1024, 512, 128], num_layers=[16, 8, 4, 2], max_epochs=580, test_split=0.05, val_split=0.05):
+def test_model_sizes(hidden_sizes=[1536, 1024, 512, 128], num_layers=[16, 8, 4, 2], max_epochs=580, patience=50, test_split=0.05, val_split=0.05):
     """
     Test different model sizes and save all results.
     
@@ -431,7 +431,7 @@ def test_model_sizes(hidden_sizes=[1536, 1024, 512, 128], num_layers=[16, 8, 4, 
                     num_layers=num_layer,
                     batch_size=24,
                     max_epochs=max_epochs,
-                    patience=max_epochs  # No early stopping
+                    patience=patience  # No early stopping
                 )
                 
                 # Train the model
@@ -754,7 +754,8 @@ if __name__ == "__main__":
                        help='Fraction of data to use for testing')
     parser.add_argument('--val-split', type=float, default=0.05,
                        help='Fraction of data to use for validation')
-    
+    parser.add_argument('--patience', type=int, default=50,
+                       help='Number of epochs to wait before early stopping')
     args = parser.parse_args()
     
     if args.regenerate_plots or args.plot_only:
@@ -768,8 +769,8 @@ if __name__ == "__main__":
         
         if not args.plot_only:
             print("\nContinuing with normal training after plot regeneration...")
-            results = test_model_sizes(args.hidden_sizes, args.num_layers, args.max_epochs, args.test_split, args.val_split)
+            results = test_model_sizes(args.hidden_sizes, args.num_layers, args.max_epochs, args.patience, args.test_split, args.val_split)
     else:
         # Normal training mode
         print("Starting normal model training...")
-        results = test_model_sizes(args.hidden_sizes, args.num_layers, args.max_epochs, args.test_split, args.val_split) 
+        results = test_model_sizes(args.hidden_sizes, args.num_layers, args.max_epochs, args.patience, args.test_split, args.val_split)
