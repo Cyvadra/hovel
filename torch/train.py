@@ -97,8 +97,8 @@ class OptimizedTrainingConfig:
         self.gradient_clip_norm = 1.0
         
         # Data parameters
-        self.val_split = 0.1
-        self.test_split = 0.1
+        self.val_split = 0.05
+        self.test_split = 0.05
         
         # Loss parameters
         self.mse_weight = 0.7
@@ -201,7 +201,7 @@ def load_and_preprocess_data(file_path='training_data.h5'):
         
     return X, Y
 
-def prepare_optimized_data(X, Y, batch_size, val_split=0.1, test_split=0.1, device=None):
+def prepare_optimized_data(X, Y, batch_size, val_split=0.05, test_split=0.05, device=None):
     """
     Prepare data in the optimized single-tensor format for maximum speed.
     This creates all data on GPU at once and uses slicing for batches.

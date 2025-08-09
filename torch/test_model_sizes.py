@@ -386,7 +386,7 @@ def load_loss_data(model_name):
     else:
         return None, None
 
-def test_model_sizes(hidden_sizes=[1536, 1024, 512, 128], num_layers=[16, 8, 4, 2]):
+def test_model_sizes(hidden_sizes=[1536, 1024, 512, 128], num_layers=[16, 8, 4, 2], max_epochs=580):
     """
     Test different model sizes and save all results.
     
@@ -438,8 +438,8 @@ def test_model_sizes(hidden_sizes=[1536, 1024, 512, 128], num_layers=[16, 8, 4, 
                     hidden_size=hidden_size,
                     num_layers=num_layer,
                     batch_size=24,
-                    max_epochs=580,
-                    patience=580  # No early stopping
+                    max_epochs=max_epochs,
+                    patience=max_epochs  # No early stopping
                 )
                 
                 # Train the model
@@ -734,12 +734,14 @@ if __name__ == "__main__":
                        help='Regenerate plots for all existing models without retraining')
     parser.add_argument('--regenerate-pattern', type=str, default="model_*_layers_*_best_model.pth",
                        help='Glob pattern to match model files for plot regeneration')
-    parser.add_argument('--hidden-sizes', nargs='+', type=int, default=[2048, 1536],
+    parser.add_argument('--hidden-sizes', nargs='+', type=int, default=[2048, 256],
                        help='List of hidden layer sizes to test')
-    parser.add_argument('--num-layers', nargs='+', type=int, default=[24, 16, 12],
+    parser.add_argument('--num-layers', nargs='+', type=int, default=[12],
                        help='List of number of layers to test')
     parser.add_argument('--plot-only', action='store_true',
                        help='Only regenerate plots, do not train new models')
+    parser.add_argument('--max-epochs', type=int, default=580,
+                       help='Maximum number of epochs to train')
     
     args = parser.parse_args()
     
@@ -754,8 +756,8 @@ if __name__ == "__main__":
         
         if not args.plot_only:
             print("\nContinuing with normal training after plot regeneration...")
-            results = test_model_sizes(args.hidden_sizes, args.num_layers)
+            results = test_model_sizes(args.hidden_sizes, args.num_layers, args.max_epochs)
     else:
         # Normal training mode
         print("Starting normal model training...")
-        results = test_model_sizes(args.hidden_sizes, args.num_layers) 
+        results = test_model_sizes(args.hidden_sizes, args.num_layers, args.max_epochs) 
