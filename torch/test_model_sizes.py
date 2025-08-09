@@ -503,8 +503,21 @@ def create_comparison_plots(results, hidden_sizes, num_layers):
         print("No successful models to compare!")
         return
     
-    # Create a larger figure for better visualization
-    plt.figure(figsize=(16, 12))
+    # Calculate automatic figure size based on data dimensions
+    # Base size for 2x3 subplot layout, scaled by data complexity
+    base_width = 16
+    base_height = 12
+    
+    # Scale based on number of hidden sizes and layers
+    # More data points need more space for readability
+    width_scale = min(1.5, max(0.8, len(num_layers) / 4))  # Scale based on number of layers
+    height_scale = min(1.5, max(0.8, len(hidden_sizes) / 4))  # Scale based on number of hidden sizes
+    
+    fig_width = base_width * width_scale
+    fig_height = base_height * height_scale
+    
+    # Create figure with automatically calculated size
+    plt.figure(figsize=(fig_width, fig_height))
     
     # 1. Training loss comparison
     plt.subplot(2, 3, 1)
