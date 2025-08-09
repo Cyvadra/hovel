@@ -172,6 +172,7 @@ def load_and_preprocess_data(file_path='training_data.h5'):
         # Load X and Y, ensuring float32 type
         X = np.array(f['X'][:], dtype=np.float32)
         Y = np.array(f['Y'][:], dtype=np.float32)
+        T = np.array(f['T'][:], dtype=np.int32)
 
         # Transpose if the first dimension is smaller than the second
         if X.shape[0] != Y.shape[0]:
@@ -179,6 +180,10 @@ def load_and_preprocess_data(file_path='training_data.h5'):
             X = X.T
             Y = Y.T
             print(f"Transposed X shape: {X.shape}, Y shape: {Y.shape}")
+        if T.shape[0] != Y.shape[0]:
+            print("Warning: T and Y have different number of samples. Attempting transpose.")
+            T = T.T
+            print(f"Transposed T shape: {T.shape}")
 
         # Improved preprocessing: Standardize X and apply robust scaling to Y
         # Standardize X (zero mean, unit variance)
@@ -196,12 +201,13 @@ def load_and_preprocess_data(file_path='training_data.h5'):
 
         print(f"X shape: {X.shape}, dtype: {X.dtype}")
         print(f"Y shape: {Y.shape}, dtype: {Y.dtype}")
+        print(f"T shape: {T.shape}, dtype: {T.dtype}")
         print(f"X stats - mean: {np.mean(X):.4f}, std: {np.std(X):.4f}")
         print(f"Y stats - mean: {np.mean(Y):.4f}, std: {np.std(Y):.4f}")
         
-    return X, Y
+    return X, Y, T
 
-def prepare_optimized_data(X, Y, batch_size, val_split=0.05, test_split=0.05, device=None):
+def prepare_optimized_data(X, Y, T, batch_size, val_split=0.05, test_split=0.05, device=None):
     """
     Prepare data in the optimized single-tensor format for maximum speed.
     This creates all data on GPU at once and uses slicing for batches.
@@ -224,6 +230,12 @@ def prepare_optimized_data(X, Y, batch_size, val_split=0.05, test_split=0.05, de
     train_indices = indices[:train_size]
     val_indices = indices[train_size:train_size + val_size]
     test_indices = indices[train_size + val_size:]
+
+    # Calculate T timestamps
+    assert T.shape[0] == total_size, "T must have the same number of samples as X and Y"
+    train_last_ts = T[train_size - 1]
+    val_last_ts = T[train_size + val_size - 1]
+    test_last_ts = T[train_size + val_size + test_size - 1]
     
     # Split data using indices
     X_train = X_tensor[train_indices]
@@ -243,7 +255,10 @@ def prepare_optimized_data(X, Y, batch_size, val_split=0.05, test_split=0.05, de
         'batch_size': batch_size,
         'num_train_batches': train_size // batch_size,
         'num_val_batches': val_size // batch_size,
-        'num_test_batches': test_size // batch_size
+        'num_test_batches': test_size // batch_size,
+        'train_last_ts': train_last_ts,
+        'val_last_ts': val_last_ts,
+        'test_last_ts': test_last_ts
     }
 
 # --- Optimized Model Definition ---
@@ -676,7 +691,7 @@ def extract_final_predictions(model_output, output_dim):
     
     return final_predictions
 
-def plot_losses(train_losses, val_losses, model_name="optimized_model"):
+def plot_losses(train_losses, val_losses, train_last_ts, val_last_ts, test_last_ts, model_name="optimized_model"):
     """
     Enhanced plotting with better visualization.
     """
@@ -690,18 +705,18 @@ def plot_losses(train_losses, val_losses, model_name="optimized_model"):
     
     # Main loss plot
     plt.subplot(2, 2, 1)
-    plt.plot(train_losses, label='Training Loss', alpha=0.8)
-    plt.plot(val_losses, label='Validation Loss', alpha=0.8)
+    plt.plot(train_losses, label=f'Training Loss (till {train_last_ts})', alpha=0.8)
+    plt.plot(val_losses, label=f'Validation Loss (till {val_last_ts})', alpha=0.8)
     plt.xlabel('Epochs')
     plt.ylabel('Loss')
-    plt.title(f'Training and Validation Loss - {model_name}')
+    plt.title(f'train & val loss - {test_last_ts}')
     plt.legend()
     plt.grid(True, alpha=0.3)
     
     # Log scale plot
     plt.subplot(2, 2, 2)
-    plt.semilogy(train_losses, label='Training Loss', alpha=0.8)
-    plt.semilogy(val_losses, label='Validation Loss', alpha=0.8)
+    plt.semilogy(train_losses, label=f'Training Loss (till {train_last_ts})', alpha=0.8)
+    plt.semilogy(val_losses, label=f'Validation Loss (till {val_last_ts})', alpha=0.8)
     plt.xlabel('Epochs')
     plt.ylabel('Loss (log scale)')
     plt.title('Loss in Log Scale')
@@ -724,7 +739,7 @@ def plot_losses(train_losses, val_losses, model_name="optimized_model"):
     if window > 1:
         val_ma = np.convolve(val_losses, np.ones(window)/window, mode='valid')
         plt.plot(range(window-1, len(val_losses)), val_ma, label=f'Val Loss (MA-{window})', alpha=0.8)
-    plt.plot(val_losses, label='Validation Loss', alpha=0.5)
+    plt.plot(val_losses, label=f'Validation Loss (till {val_last_ts})', alpha=0.5)
     plt.xlabel('Epochs')
     plt.ylabel('Loss')
     plt.title('Validation Loss with Moving Average')
@@ -754,7 +769,7 @@ if __name__ == "__main__":
     print("=" * 60)
     
     # Load and prepare data
-    X, Y = load_and_preprocess_data()
+    X, Y, T = load_and_preprocess_data()
     
     # Determine dimensions
     input_dim = X.shape[1]
@@ -791,6 +806,7 @@ if __name__ == "__main__":
         test_split=config.test_split,
         device=device
     )
+    data_dict['T'] = T
     
     # Train the model
     model, train_losses, val_losses, test_loss = train_model_optimized(
@@ -803,7 +819,7 @@ if __name__ == "__main__":
     save_training_config(config, "optimized_model")
     
     # Plot results
-    plot_losses(train_losses, val_losses)
+    plot_losses(train_losses, val_losses, data_dict['train_last_ts'], data_dict['val_last_ts'], data_dict['test_last_ts'])
 
     print("\nOptimized training complete!")
     print("Files saved:")

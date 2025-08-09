@@ -1,12 +1,7 @@
 import torch
-import torch.nn as nn
-import torch.optim as optim
-from torch.utils.data import DataLoader, TensorDataset
 import numpy as np
 import matplotlib.pyplot as plt
-import h5py
 import os
-from torch.optim.lr_scheduler import ReduceLROnPlateau
 import json
 from datetime import datetime
 import gc
@@ -159,13 +154,13 @@ def regenerate_all_plots(hidden_sizes=[1536, 1024, 512, 128], num_layers=[16, 8,
     print(f"Checking number of layers: {num_layers}")
     
     # Load and prepare data (same for all models)
-    X, Y = load_and_preprocess_data()
+    X, Y, T = load_and_preprocess_data()
     input_dim = X.shape[1]
     output_dim = Y.shape[1]
     
     # Setup data preparation
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    data_dict = prepare_optimized_data(X, Y, batch_size=24, device=device, test_split=test_split, val_split=val_split)
+    data_dict = prepare_optimized_data(X, Y, T, batch_size=24, device=device, test_split=test_split, val_split=val_split)
     
     # Track which models were processed
     processed_models = []
@@ -207,7 +202,7 @@ def regenerate_all_plots(hidden_sizes=[1536, 1024, 512, 128], num_layers=[16, 8,
                     
                     # Regenerate plots
                     if train_losses is not None and val_losses is not None:
-                        plot_losses(train_losses, val_losses, model_name)
+                        plot_losses(train_losses, val_losses, data_dict['train_last_ts'], data_dict['val_last_ts'], data_dict['test_last_ts'], model_name)
                     else:
                         print(f"No loss data found for {model_name}, skipping loss plot")
                     
@@ -263,13 +258,13 @@ def regenerate_plots_by_pattern(pattern="model_*_layers_*_best_model.pth", test_
         print(f"  - {file}")
     
     # Load and prepare data
-    X, Y = load_and_preprocess_data()
+    X, Y, T = load_and_preprocess_data()
     input_dim = X.shape[1]
     output_dim = Y.shape[1]
     
     # Setup data preparation
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    data_dict = prepare_optimized_data(X, Y, batch_size=24, device=device, test_split=test_split, val_split=val_split)
+    data_dict = prepare_optimized_data(X, Y, T, batch_size=24, device=device, test_split=test_split, val_split=val_split)
     
     # Track which models were processed
     processed_models = []
@@ -310,7 +305,7 @@ def regenerate_plots_by_pattern(pattern="model_*_layers_*_best_model.pth", test_
             
             # Regenerate plots
             if train_losses is not None and val_losses is not None:
-                plot_losses(train_losses, val_losses, model_name)
+                plot_losses(train_losses, val_losses, data_dict['train_last_ts'], data_dict['val_last_ts'], data_dict['test_last_ts'], model_name)
             else:
                 print(f"No loss data found for {model_name}, skipping loss plot")
             
@@ -403,13 +398,13 @@ def test_model_sizes(hidden_sizes=[1536, 1024, 512, 128], num_layers=[16, 8, 4, 
     show_gpu_memory_usage()
     
     # Load and prepare data
-    X, Y = load_and_preprocess_data()
+    X, Y, T = load_and_preprocess_data()
     input_dim = X.shape[1]
     output_dim = Y.shape[1]
     
     # Setup data preparation (same for all models)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    data_dict = prepare_optimized_data(X, Y, batch_size=24, device=device, test_split=test_split, val_split=val_split)
+    data_dict = prepare_optimized_data(X, Y, T, batch_size=24, device=device, test_split=test_split, val_split=val_split)
     
     # Store results for comparison
     results = {}
@@ -453,7 +448,7 @@ def test_model_sizes(hidden_sizes=[1536, 1024, 512, 128], num_layers=[16, 8, 4, 
                 save_loss_data(train_losses, val_losses, model_name)
                 
                 # Plot results
-                plot_losses(train_losses, val_losses, model_name)
+                plot_losses(train_losses, val_losses, data_dict['train_last_ts'], data_dict['val_last_ts'], data_dict['test_last_ts'], model_name)
                 plot_predictions(model, data_dict, output_dim, model_name=model_name)
                 
                 # Store results
