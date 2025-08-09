@@ -734,6 +734,7 @@ def train_model_optimized(data_dict, input_dim, output_dim,
     except KeyboardInterrupt:
         logger.info("Training interrupted by user. Saving current model...")
         torch.save(model.state_dict(), f'{model_name}_interrupted.pth')
+        plot_losses(train_losses, val_losses, data_dict['train_last_ts'], data_dict['val_last_ts'], data_dict['test_last_ts'], model_name)
         return model, train_losses, val_losses, None
     except Exception as e:
         logger.error(f"Training failed with error: {e}")
@@ -748,16 +749,12 @@ def plot_losses(train_losses, val_losses, train_last_ts, val_last_ts, test_last_
     # Remove first 100 elements if length is bigger than 200
     if len(train_losses) > 200:
         train_losses = train_losses[100:]
-    elif len(train_losses) > 100:
-        train_losses = train_losses[:50]
-    elif len(train_losses) > 50:
-        train_losses = train_losses[:20]
+    else:
+        train_losses = train_losses[round(len(train_losses)*2/3):]
     if len(val_losses) > 200:
         val_losses = val_losses[100:]
-    elif len(val_losses) > 100:
-        val_losses = val_losses[:50]
-    elif len(val_losses) > 50:
-        val_losses = val_losses[:20]
+    else:
+        val_losses = val_losses[round(len(val_losses)*2/3):]
     
     plt.figure(figsize=(12, 8))
     
