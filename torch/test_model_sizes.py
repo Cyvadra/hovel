@@ -146,7 +146,7 @@ def plot_predictions(model, data_dict, output_dim, model_name="model"):
     
     print(f"Predictions plot saved to '{model_name}_predictions.png'")
 
-def regenerate_all_plots(hidden_sizes=[1536, 1024, 512, 128], num_layers=[16, 8, 4, 2]):
+def regenerate_all_plots(hidden_sizes=[1536, 1024, 512, 128], num_layers=[16, 8, 4, 2], test_split=0.05, val_split=0.05):
     """
     Regenerate plots for all existing models without retraining.
     
@@ -165,7 +165,7 @@ def regenerate_all_plots(hidden_sizes=[1536, 1024, 512, 128], num_layers=[16, 8,
     
     # Setup data preparation
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    data_dict = prepare_optimized_data(X, Y, batch_size=24, device=device)
+    data_dict = prepare_optimized_data(X, Y, batch_size=24, device=device, test_split=test_split, val_split=val_split)
     
     # Track which models were processed
     processed_models = []
@@ -242,7 +242,7 @@ def regenerate_all_plots(hidden_sizes=[1536, 1024, 512, 128], num_layers=[16, 8,
     
     return processed_models, skipped_models
 
-def regenerate_plots_by_pattern(pattern="model_*_layers_*_best_model.pth"):
+def regenerate_plots_by_pattern(pattern="model_*_layers_*_best_model.pth", test_split=0.05, val_split=0.05):
     """
     Regenerate plots for all models matching a specific pattern.
     
@@ -269,7 +269,7 @@ def regenerate_plots_by_pattern(pattern="model_*_layers_*_best_model.pth"):
     
     # Setup data preparation
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    data_dict = prepare_optimized_data(X, Y, batch_size=24, device=device)
+    data_dict = prepare_optimized_data(X, Y, batch_size=24, device=device, test_split=test_split, val_split=val_split)
     
     # Track which models were processed
     processed_models = []
@@ -386,7 +386,7 @@ def load_loss_data(model_name):
     else:
         return None, None
 
-def test_model_sizes(hidden_sizes=[1536, 1024, 512, 128], num_layers=[16, 8, 4, 2], max_epochs=580):
+def test_model_sizes(hidden_sizes=[1536, 1024, 512, 128], num_layers=[16, 8, 4, 2], max_epochs=580, test_split=0.05, val_split=0.05):
     """
     Test different model sizes and save all results.
     
@@ -409,7 +409,7 @@ def test_model_sizes(hidden_sizes=[1536, 1024, 512, 128], num_layers=[16, 8, 4, 
     
     # Setup data preparation (same for all models)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    data_dict = prepare_optimized_data(X, Y, batch_size=24, device=device)
+    data_dict = prepare_optimized_data(X, Y, batch_size=24, device=device, test_split=test_split, val_split=val_split)
     
     # Store results for comparison
     results = {}
@@ -742,6 +742,10 @@ if __name__ == "__main__":
                        help='Only regenerate plots, do not train new models')
     parser.add_argument('--max-epochs', type=int, default=580,
                        help='Maximum number of epochs to train')
+    parser.add_argument('--test-split', type=float, default=0.05,
+                       help='Fraction of data to use for testing')
+    parser.add_argument('--val-split', type=float, default=0.05,
+                       help='Fraction of data to use for validation')
     
     args = parser.parse_args()
     
@@ -749,15 +753,15 @@ if __name__ == "__main__":
         # Regenerate plots for existing models
         if args.plot_only:
             print("Plot-only mode: Regenerating plots for all existing models...")
-            processed, skipped = regenerate_plots_by_pattern(args.regenerate_pattern)
+            processed, skipped = regenerate_plots_by_pattern(args.regenerate_pattern, args.test_split, args.val_split)
         else:
             print("Regenerating plots for specified model sizes...")
-            processed, skipped = regenerate_all_plots(args.hidden_sizes, args.num_layers)
+            processed, skipped = regenerate_all_plots(args.hidden_sizes, args.num_layers, args.test_split, args.val_split)
         
         if not args.plot_only:
             print("\nContinuing with normal training after plot regeneration...")
-            results = test_model_sizes(args.hidden_sizes, args.num_layers, args.max_epochs)
+            results = test_model_sizes(args.hidden_sizes, args.num_layers, args.max_epochs, args.test_split, args.val_split)
     else:
         # Normal training mode
         print("Starting normal model training...")
-        results = test_model_sizes(args.hidden_sizes, args.num_layers, args.max_epochs) 
+        results = test_model_sizes(args.hidden_sizes, args.num_layers, args.max_epochs, args.test_split, args.val_split) 

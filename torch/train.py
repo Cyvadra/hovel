@@ -220,7 +220,7 @@ def prepare_optimized_data(X, Y, batch_size, val_split=0.05, test_split=0.05, de
     train_size = total_size - test_size - val_size
     
     # Create indices for splits
-    indices = torch.randperm(total_size)
+    indices = np.arange(total_size)
     train_indices = indices[:train_size]
     val_indices = indices[train_size:train_size + val_size]
     test_indices = indices[train_size + val_size:]
