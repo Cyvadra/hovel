@@ -132,14 +132,27 @@ class ModelManager:
             self.hidden_size, self.num_layers = self._parse_model_params_from_filename(self.model_path)
             
             # Load the model state
-            state_dict = torch.load(self.model_path, map_location=self.device)
+            checkpoint = torch.load(self.model_path, map_location=self.device)
+            
+            # Handle different checkpoint formats
+            if isinstance(checkpoint, dict):
+                # Check if this is a full training checkpoint with model_state_dict
+                if 'model_state_dict' in checkpoint:
+                    logger.info("Loading from full training checkpoint")
+                    state_dict = checkpoint['model_state_dict']
+                else:
+                    # Assume it's a direct state dict
+                    state_dict = checkpoint
+            else:
+                # Assume it's a direct state dict
+                state_dict = checkpoint
             
             # Handle DataParallel saved models
             new_state_dict = {}
             for key, value in state_dict.items():
                 if key.startswith('module.'):
                     new_key = key[7:]  # Remove 'module.' prefix
-                    new_state_dict[key] = value
+                    new_state_dict[new_key] = value
                 else:
                     new_state_dict[key] = value
             
