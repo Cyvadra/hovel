@@ -15,7 +15,6 @@ from train import (
     train_model_optimized, 
     plot_losses, 
     OptimizedTrainingConfig,
-    extract_final_predictions,
     OptimizedModel
 )
 
@@ -104,8 +103,6 @@ def plot_predictions(model, data_dict, output_dim, model_name="model"):
     # Make predictions
     with torch.no_grad():
         predictions = model(X_val)
-        # Extract final predictions (p3 values)
-        predictions = extract_final_predictions(predictions, output_dim)
     
     # Convert to numpy for plotting
     predictions = predictions.cpu().numpy()

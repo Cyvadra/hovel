@@ -101,8 +101,6 @@ class OptimizedTrainingConfig:
         self.test_split = 0.05
         
         # Loss parameters
-        self.mse_weight = 0.7
-        self.huber_weight = 0.3
         self.huber_delta = 1.0
         
         # Scheduler parameters
@@ -292,8 +290,8 @@ class OptimizedModel(nn.Module):
             )
             self.layers.append(layer)
         
-        # Output projection: 3*output_dim (p1, p2, p3 for each output dimension)
-        self.output_proj = nn.Linear(hidden_size, 3 * output_dim)
+        # Output projection: output_dim (direct predictions)
+        self.output_proj = nn.Linear(hidden_size, output_dim)
         
         # Initialize weights properly
         self.apply(self._init_weights)
@@ -313,7 +311,7 @@ class OptimizedModel(nn.Module):
             x (torch.Tensor): Input tensor of shape (batch_size, input_dim)
 
         Returns:
-            torch.Tensor: Output tensor of shape (batch_size, 3*output_dim)
+            torch.Tensor: Output tensor of shape (batch_size, output_dim)
         """
         # Input projection
         x = self.input_proj(x)
@@ -331,85 +329,7 @@ class OptimizedModel(nn.Module):
         return x
 
 # --- Optimized Loss Functions ---
-class HuberLoss(nn.Module):
-    """
-    Huber loss combines the best properties of L1 and L2 loss.
-    More robust to outliers than MSE.
-    """
-    def __init__(self, delta=1.0):
-        super().__init__()
-        self.delta = delta
-    
-    def forward(self, pred, target):
-        error = pred - target
-        abs_error = torch.abs(error)
-        quadratic = torch.clamp(abs_error, max=self.delta)
-        linear = abs_error - quadratic
-        return torch.mean(0.5 * quadratic**2 + self.delta * linear)
-
-class WeightedCombinedLoss(nn.Module):
-    """
-    Weighted combined loss function for 3*output_dim model outputs.
-    """
-    def __init__(self, output_dim, mse_weight=0.7, huber_weight=0.3, huber_delta=1.0):
-        super().__init__()
-        self.output_dim = output_dim
-        self.mse_weight = mse_weight
-        self.huber_weight = huber_weight
-        self.mse_loss = nn.MSELoss(reduction='none')
-        self.huber_loss = HuberLoss(delta=huber_delta)
-        self.step_count = 0
-        
-    def forward(self, pred, target):
-        """
-        Args:
-            pred (torch.Tensor): Model output of shape (batch_size, 3*output_dim)
-            target (torch.Tensor): Target values of shape (batch_size, output_dim)
-        
-        Returns:
-            torch.Tensor: Weighted loss value
-        """
-        batch_size = pred.shape[0]
-        
-        # Reshape predictions to separate p1, p2, p3 for each output dimension
-        pred_reshaped = pred.view(batch_size, self.output_dim, 3)
-        
-        # Extract p1, p2, p3 for each output dimension
-        p1 = pred_reshaped[:, :, 0]  # weight parameters ∈ [-1,1]
-        p2 = pred_reshaped[:, :, 1]  # negative predictions
-        p3 = pred_reshaped[:, :, 2]  # positive predictions
-        
-        # Calculate weights based on p1
-        p1_clamped = torch.clamp(p1, -1.0, 1.0)
-        weight_p2 = torch.abs(p1_clamped - 1) / 2
-        weight_p3 = torch.abs(p1_clamped + 1) / 2
-        
-        # Calculate individual losses for p2 and p3
-        loss_p2 = self.mse_loss(p2, target)
-        loss_p3 = self.mse_loss(p3, target)
-        
-        # Apply weights and combine losses
-        weighted_loss = weight_p2 * loss_p2 + weight_p3 * loss_p3
-        
-        # Take mean across batch and output dimensions
-        final_loss = torch.mean(weighted_loss)
-        
-        # Print statistics every 1000 steps for monitoring
-        self.step_count += 1
-        if self.step_count % 1000 == 0:
-            with torch.no_grad():
-                p1_mean = torch.mean(p1).item()
-                p1_std = torch.std(p1).item()
-                p2_mean = torch.mean(p2).item()
-                p3_mean = torch.mean(p3).item()
-                weight_p2_mean = torch.mean(weight_p2).item()
-                weight_p3_mean = torch.mean(weight_p3).item()
-                
-                print(f"Step {self.step_count} - p1: mean={p1_mean:.3f}, std={p1_std:.3f}, "
-                      f"p2_mean={p2_mean:.3f}, p3_mean={p3_mean:.3f}, "
-                      f"w2={weight_p2_mean:.3f}, w3={weight_p3_mean:.3f}")
-        
-        return final_loss
+# Using PyTorch's built-in HuberLoss instead of custom implementation
 
 # --- Optimized Training Function ---
 def train_model_optimized(data_dict, input_dim, output_dim, 
@@ -488,11 +408,8 @@ def train_model_optimized(data_dict, input_dim, output_dim,
     )
     
     # Loss function
-    criterion = WeightedCombinedLoss(
-        output_dim, 
-        mse_weight=config.mse_weight, 
-        huber_weight=config.huber_weight, 
-        huber_delta=config.huber_delta
+    criterion = nn.HuberLoss(
+        delta=config.huber_delta
     )
     
     # Mixed precision setup
@@ -672,29 +589,6 @@ def train_model_optimized(data_dict, input_dim, output_dim,
         raise e
 
 # --- Utility Functions ---
-def extract_final_predictions(model_output, output_dim):
-    """
-    Extract final predictions from 3*output_dim model output.
-    """
-    batch_size = model_output.shape[0]
-    
-    # Reshape to separate p1, p2, p3 for each output dimension
-    pred_reshaped = model_output.view(batch_size, output_dim, 3)
-    
-    # Extract p1, p2, p3
-    p1 = pred_reshaped[:, :, 0]  # weight parameters
-    p2 = pred_reshaped[:, :, 1]  # negative predictions
-    p3 = pred_reshaped[:, :, 2]  # positive predictions
-    
-    # Calculate weights (clamp p1 to ensure weights sum to 1)
-    p1_clamped = torch.clamp(p1, -1.0, 1.0)
-    weight_p2 = torch.abs(p1_clamped - 1) / 2
-    weight_p3 = torch.abs(p1_clamped + 1) / 2
-    
-    # Weighted combination of p2 and p3
-    final_predictions = weight_p2 * p2 + weight_p3 * p3
-    
-    return final_predictions
 
 def plot_losses(train_losses, val_losses, train_last_ts, val_last_ts, test_last_ts, model_name="optimized_model"):
     """
@@ -793,7 +687,7 @@ if __name__ == "__main__":
     print(f"Model configuration:")
     print(f"  Input dimension: {input_dim}")
     print(f"  Original output dimension: {output_dim}")
-    print(f"  Model output dimension: {3 * output_dim} (3 values per output: p1, p2, p3)")
+    print(f"  Model output dimension: {output_dim} (direct predictions)")
     print(f"  Hidden size: {config.hidden_size}")
     print(f"  Number of layers: {config.num_layers}")
     print(f"  Dropout rate: {config.dropout_rate}")

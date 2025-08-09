@@ -27,7 +27,7 @@ import time
 import json
 
 # Import the model class from the training script
-from train import OptimizedModel, extract_final_predictions
+from train import OptimizedModel
 
 # --- Logging Setup ---
 def setup_logging():
@@ -153,8 +153,8 @@ class ModelManager:
             
             # Look for output_proj.weight to get output_dim
             if 'output_proj.weight' in new_state_dict:
-                # The output is 3*output_dim, so divide by 3
-                self.output_dim = new_state_dict['output_proj.weight'].shape[0] // 3
+                # The output is output_dim (direct predictions)
+                self.output_dim = new_state_dict['output_proj.weight'].shape[0]
             else:
                 # Default values if we can't infer
                 self.output_dim = 1
@@ -180,7 +180,7 @@ class ModelManager:
             logger.info(f"Output dimension: {self.output_dim}")
             logger.info(f"Hidden size: {self.hidden_size}")
             logger.info(f"Number of layers: {self.num_layers}")
-            logger.info(f"Model output dimension: {3 * self.output_dim}")
+            logger.info(f"Model output dimension: {self.output_dim}")
             
             return True
             
@@ -213,11 +213,8 @@ class ModelManager:
             with torch.no_grad():
                 model_output = self.model(input_tensor)
                 
-                # Extract final predictions from the 3*output_dim output
-                predictions = extract_final_predictions(model_output, self.output_dim)
-                
                 # Convert back to numpy
-                predictions_np = predictions.cpu().numpy()
+                predictions_np = model_output.cpu().numpy()
                 
                 return predictions_np
                 
@@ -238,7 +235,7 @@ class ModelManager:
             "output_dim": self.output_dim,
             "hidden_size": self.hidden_size,
             "num_layers": self.num_layers,
-            "model_output_dim": 3 * self.output_dim if self.output_dim else None,
+            "model_output_dim": self.output_dim if self.output_dim else None,
             "parameters": sum(p.numel() for p in self.model.parameters()) if self.model else 0
         }
 
