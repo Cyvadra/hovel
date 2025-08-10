@@ -109,11 +109,11 @@ def plot_predictions(model, data_dict, output_dim, model_name="model"):
     actual = Y_val.cpu().numpy()
     
     # Create subplots for each output dimension
-    num_outputs = min(output_dim, 24)  # Limit to 24 for readability
+    num_outputs = output_dim
     fig, axes = plt.subplots(6, 4, figsize=(15, 10))
     axes = axes.flatten()
     
-    for i in range(num_outputs):
+    for i in range(0, num_outputs, 3):
         ax = axes[i]
         ax.scatter(actual[:, i], predictions[:, i], alpha=0.6, s=20)
         ax.plot([actual[:, i].min(), actual[:, i].max()], 

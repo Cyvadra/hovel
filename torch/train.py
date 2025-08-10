@@ -210,7 +210,7 @@ class OptimizedTrainingConfig:
         
         # Training parameters - optimized for speed
         self.batch_size = 128  # Increased for better GPU utilization
-        self.learning_rate = 1e-3
+        self.learning_rate = 2e-4
         self.weight_decay = 1e-4
         self.max_epochs = 300
         self.patience = 30
@@ -673,8 +673,11 @@ def train_model_optimized(data_dict, input_dim, output_dim,
             if avg_val_loss < best_val_loss:
                 best_val_loss = avg_val_loss
                 patience_counter = 0
-                torch.save(model.state_dict(), best_model_path)
-                logger.info(f"  -> New best model saved! Val Loss: {best_val_loss:.6f}")
+                if epoch > 100:
+                    torch.save(model.state_dict(), best_model_path)
+                    logger.info(f"  -> New best model saved! Val Loss: {best_val_loss:.6f}")
+                else:
+                    logger.info(f"  -> New best model! Val Loss: {best_val_loss:.6f}")
             else:
                 patience_counter += 1
                 if patience_counter >= config.patience:
