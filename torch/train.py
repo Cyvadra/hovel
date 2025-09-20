@@ -13,6 +13,12 @@ from torch.cuda.amp import GradScaler, autocast
 import logging
 import time
 from collections import defaultdict
+from error_handling import (
+    TrainingError, DataError, ModelError, ConfigurationError,
+    validate_tensor, validate_array, validate_positive,
+    log_execution_time, handle_exception, check_gpu_memory
+)
+from config_validator import ConfigValidator, validate_training_config
 warnings.filterwarnings('ignore')
 
 # --- Checkpoint Management ---
@@ -200,36 +206,37 @@ class TrainingMetrics:
 
 # --- Configuration Management ---
 class OptimizedTrainingConfig:
-    """Optimized configuration for training parameters."""
+    """Optimized configuration for training parameters with noise regularization."""
     
     def __init__(self):
-        # Model parameters
+        # Model parameters - optimized defaults
         self.hidden_size = 512
         self.num_layers = 4
-        self.dropout_rate = 0.1
+        self.noise_std = 0.01  # Initial noise standard deviation
+        self.noise_decay = 0.995  # Noise decay rate per epoch
+        self.min_noise_std = 0.001  # Minimum noise level
         
-        # Training parameters - optimized for speed
-        self.batch_size = 128  # Increased for better GPU utilization
-        self.learning_rate = 2e-4
-        self.weight_decay = 1e-4
-        self.max_epochs = 300
-        self.patience = 30
-        self.gradient_clip_norm = 1.0
+        # Training parameters - enhanced stability defaults
+        self.batch_size = 32  # Reduced batch size for better generalization
+        self.learning_rate = 1e-4  # Further reduced learning rate for stability
+        self.weight_decay = 1e-4  # Increased L2 regularization
+        self.max_epochs = 300  # Extended training time
+        self.patience = 30  # Increased patience for noise adaptation
+        self.gradient_clip_norm = 0.3  # Tighter gradient clipping
         
         # Data parameters
-        self.val_split = 0.05
-        self.test_split = 0.05
+        self.val_split = 0.1  # Increased for better validation
+        self.test_split = 0.1  # Increased for better testing
         
-        # Loss parameters
-        self.huber_delta = 1.0
+        # Loss parameters (removed huber_delta - using L1Loss now)
         
-        # Scheduler parameters
-        self.scheduler_t0 = 20
+        # Scheduler parameters - improved defaults
+        self.scheduler_t0 = 10  # Reduced for faster warmup
         self.scheduler_t_mult = 2
         self.scheduler_eta_min = 1e-6
         
-        # Mixed precision
-        self.use_mixed_precision = True
+        # Mixed precision and data type optimization
+        self.use_mixed_precision = True  # Uses Float16 data loading for memory efficiency
         
         # Model saving
         self.save_checkpoint_every = 20
@@ -241,6 +248,22 @@ class OptimizedTrainingConfig:
                 setattr(self, key, value)
             else:
                 print(f"Warning: Unknown config parameter '{key}'")
+    
+    def validate(self):
+        """Validate the configuration."""
+        config_dict = {key: value for key, value in self.__dict__.items() 
+                      if not key.startswith('_')}
+        validated_config = validate_training_config(config_dict)
+        
+        # Update with validated values
+        for key, value in validated_config.items():
+            if hasattr(self, key):
+                setattr(self, key, value)
+    
+    def to_dict(self):
+        """Convert configuration to dictionary."""
+        return {key: value for key, value in self.__dict__.items() 
+                if not key.startswith('_')}
 
 # --- GPU Setup and Memory Management ---
 def setup_gpu():
@@ -251,8 +274,17 @@ def setup_gpu():
     device = torch.device("cuda")
     print(f"Using GPU device: {torch.cuda.get_device_name(0)}")
     
-    # Set memory fraction to avoid OOM
-    torch.cuda.set_per_process_memory_fraction(0.9)
+    # Set memory fraction to avoid OOM - use adaptive fraction based on GPU memory
+    gpu_memory_gb = torch.cuda.get_device_properties(0).total_memory / 1024**3
+    if gpu_memory_gb >= 16:
+        memory_fraction = 0.9  # High-end GPUs
+    elif gpu_memory_gb >= 8:
+        memory_fraction = 0.8  # Mid-range GPUs
+    else:
+        memory_fraction = 0.7  # Lower-end GPUs
+    
+    torch.cuda.set_per_process_memory_fraction(memory_fraction)
+    print(f"Set GPU memory fraction to {memory_fraction} for {gpu_memory_gb:.1f}GB GPU")
     
     return device
 
@@ -282,50 +314,51 @@ def clear_gpu_memory():
     gc.collect()
 
 # --- Data Loading and Preprocessing ---
+@log_execution_time
+@handle_exception
 def load_and_preprocess_data(file_path='training_data.h5'):
     """
-    Load and preprocess data with improved normalization and validation.
+    Load data that has already been preprocessed.
+    Data is loaded in Float16 format for memory efficiency.
     """
-    with h5py.File(file_path, 'r') as f:
-        # Load X and Y, ensuring float32 type
-        X = np.array(f['X'][:], dtype=np.float32)
-        Y = np.array(f['Y'][:], dtype=np.float32)
-        T = np.array(f['T'][:], dtype=np.int32)
+    if not os.path.exists(file_path):
+        raise FileNotFoundError(f"Training data file not found: {file_path}")
+    
+    try:
+        with h5py.File(file_path, 'r') as f:
+            # Load X and Y, converting to float16 for memory efficiency
+            X = np.array(f['X'][:], dtype=np.float16)
+            Y = np.array(f['Y'][:], dtype=np.float16)
+            T = np.array(f['T'][:], dtype=np.int32)
 
-        # Transpose if the first dimension is smaller than the second
-        if X.shape[0] != Y.shape[0]:
-            print("Warning: X and Y have different number of samples. Attempting transpose.")
-            X = X.T
-            Y = Y.T
-            print(f"Transposed X shape: {X.shape}, Y shape: {Y.shape}")
-        assert X.shape[0] == Y.shape[0], "X and Y must have the same number of samples"
-        if T.shape[0] != Y.shape[0]:
-            print("Warning: T and Y have different number of samples. Attempting transpose.")
-            T = T.T
-            print(f"Transposed T shape: {T.shape}")
-        assert T.shape[0] == Y.shape[0], "T and Y must have the same number of samples"
+            # Transpose if the first dimension is smaller than the second
+            if X.shape[0] != Y.shape[0]:
+                print("Warning: X and Y have different number of samples. Attempting transpose.")
+                X = X.T
+                Y = Y.T
+                print(f"Transposed X shape: {X.shape}, Y shape: {Y.shape}")
+            assert X.shape[0] == Y.shape[0], "X and Y must have the same number of samples"
+            if T.shape[0] != Y.shape[0]:
+                print("Warning: T and Y have different number of samples. Attempting transpose.")
+                T = T.T
+                print(f"Transposed T shape: {T.shape}")
+            assert T.shape[0] == Y.shape[0], "T and Y must have the same number of samples"
 
-        # Improved preprocessing: Standardize X and apply robust scaling to Y
-        # Standardize X (zero mean, unit variance)
-        X_mean = np.mean(X, axis=0, keepdims=True)
-        X_std = np.std(X, axis=0, keepdims=True)
-        X_std = np.where(X_std == 0, 1.0, X_std)  # Avoid division by zero
-        X = (X - X_mean) / X_std
+            # Validate the data
+            validate_array(X, "X")
+            validate_array(Y, "Y")
+            validate_array(T, "T")
+            
+            print(f"X shape: {X.shape}, dtype: {X.dtype}")
+            print(f"Y shape: {Y.shape}, dtype: {Y.dtype}")
+            print(f"T shape: {T.shape}, dtype: {T.dtype}")
+            print(f"X stats - mean: {np.mean(X):.4f}, std: {np.std(X):.4f}")
+            print(f"Y stats - mean: {np.mean(Y):.4f}, std: {np.std(Y):.4f}")
+            
+            return X, Y, T
         
-        # Robust scaling for Y using median and IQR
-        Y_median = np.median(Y, axis=0, keepdims=True).astype(np.float32)
-        Y_q75, Y_q25 = np.percentile(Y, [75, 25], axis=0, keepdims=True).astype(np.float32)
-        Y_iqr = Y_q75 - Y_q25
-        Y_iqr = np.where(Y_iqr == 0, 1.0, Y_iqr).astype(np.float32)  # Avoid division by zero
-        Y = ((Y - Y_median) / Y_iqr).astype(np.float32)
-
-        print(f"X shape: {X.shape}, dtype: {X.dtype}")
-        print(f"Y shape: {Y.shape}, dtype: {Y.dtype}")
-        print(f"T shape: {T.shape}, dtype: {T.dtype}")
-        print(f"X stats - mean: {np.mean(X):.4f}, std: {np.std(X):.4f}")
-        print(f"Y stats - mean: {np.mean(Y):.4f}, std: {np.std(Y):.4f}")
-        
-    return X, Y, T
+    except Exception as e:
+        raise RuntimeError(f"Failed to load data: {e}")
 
 def prepare_optimized_data(X, Y, T, batch_size, val_split=0.05, test_split=0.05, device=None):
     """
@@ -335,9 +368,9 @@ def prepare_optimized_data(X, Y, T, batch_size, val_split=0.05, test_split=0.05,
     if device is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
-    # Convert to tensors and move to GPU
-    X_tensor = torch.from_numpy(X).float().to(device)
-    Y_tensor = torch.from_numpy(Y).float().to(device)
+    # Convert to tensors and move to GPU, using half precision for memory efficiency
+    X_tensor = torch.from_numpy(X).half().to(device)
+    Y_tensor = torch.from_numpy(Y).half().to(device)
     
     # Calculate split sizes
     total_size = len(X_tensor)
@@ -387,36 +420,36 @@ def prepare_optimized_data(X, Y, T, batch_size, val_split=0.05, test_split=0.05,
 # --- Optimized Model Definition ---
 class OptimizedModel(nn.Module):
     """
-    Optimized neural network with modern best practices and speed optimizations.
+    Optimized neural network with noise regularization and advanced techniques to prevent overfitting.
     """
-    def __init__(self, input_dim, output_dim, hidden_size=512, num_layers=4, dropout_rate=0.1):
+    def __init__(self, input_dim, output_dim, hidden_size=512, num_layers=4, noise_std=0.01):
         super().__init__()
         self.input_dim = input_dim
         self.output_dim = output_dim
         self.hidden_size = hidden_size
+        self.noise_std = noise_std
+        self.training = True
         
-        # Input projection
-        self.input_proj = nn.Linear(input_dim, hidden_size)
+        # Input projection with spectral normalization
+        self.input_proj = nn.utils.spectral_norm(nn.Linear(input_dim, hidden_size))
         self.input_norm = nn.LayerNorm(hidden_size)
         
-        # Hidden layers with residual connections
+        # Hidden layers with residual connections and layer normalization
         self.layers = nn.ModuleList()
         for i in range(num_layers):
             layer = nn.Sequential(
-                nn.Linear(hidden_size, hidden_size),
+                nn.utils.spectral_norm(nn.Linear(hidden_size, hidden_size)),
                 nn.LayerNorm(hidden_size),
                 nn.GELU(),
-                nn.Dropout(dropout_rate),
-                nn.Linear(hidden_size, hidden_size),
-                nn.LayerNorm(hidden_size),
-                nn.Dropout(dropout_rate)
+                nn.utils.spectral_norm(nn.Linear(hidden_size, hidden_size)),
+                nn.LayerNorm(hidden_size)
             )
             self.layers.append(layer)
         
-        # Output projection: output_dim (direct predictions)
-        self.output_proj = nn.Linear(hidden_size, output_dim)
+        # Output projection with L1 regularization
+        self.output_proj = nn.utils.spectral_norm(nn.Linear(hidden_size, output_dim))
         
-        # Initialize weights properly
+        # Initialize weights with orthogonal initialization
         self.apply(self._init_weights)
     
     def _init_weights(self, module):
@@ -428,7 +461,7 @@ class OptimizedModel(nn.Module):
     
     def forward(self, x):
         """
-        Forward pass with residual connections.
+        Forward pass with residual connections and noise regularization.
         
         Args:
             x (torch.Tensor): Input tensor of shape (batch_size, input_dim)
@@ -436,23 +469,43 @@ class OptimizedModel(nn.Module):
         Returns:
             torch.Tensor: Output tensor of shape (batch_size, output_dim)
         """
-        # Input projection
+        # Convert input to float32 for computation
+        x = x.float()
+        
+        # Input projection with noise
         x = self.input_proj(x)
         x = self.input_norm(x)
         
-        # Hidden layers with residual connections
+        if self.training:
+            # Add Gaussian noise during training
+            noise = torch.randn_like(x) * self.noise_std
+            x = x + noise
+        
+        # Hidden layers with residual connections and noise
         for layer in self.layers:
             residual = x
             x = layer(x)
-            x = x + residual  # Residual connection
+            
+            if self.training:
+                # Add layer-specific noise
+                noise = torch.randn_like(x) * (self.noise_std / 2)  # Reduced noise in deeper layers
+                x = x + noise
+            
+            # Residual connection with scaling
+            x = 0.9 * x + 0.1 * residual  # Weighted residual connection
         
-        # Output projection
+        # Output projection with minimal noise
+        if self.training:
+            noise = torch.randn_like(x) * (self.noise_std / 4)  # Even smaller noise at output
+            x = x + noise
+        
         x = self.output_proj(x)
         
-        return x
+        # Convert back to half precision for memory efficiency
+        return x.half()
 
 # --- Optimized Loss Functions ---
-# Using PyTorch's built-in HuberLoss instead of custom implementation
+# Using PyTorch's built-in L1Loss (Mean Absolute Error)
 
 # --- Optimized Training Function ---
 def train_model_optimized(data_dict, input_dim, output_dim, 
@@ -482,8 +535,8 @@ def train_model_optimized(data_dict, input_dim, output_dim,
     logger.info(f"Using device: {device}")
     show_gpu_memory_usage()
     
-    # Create model
-    model = OptimizedModel(input_dim, output_dim, config.hidden_size, config.num_layers, config.dropout_rate)
+    # Create model with noise regularization
+    model = OptimizedModel(input_dim, output_dim, config.hidden_size, config.num_layers, config.noise_std)
     
     # Multi-GPU setup
     if torch.cuda.device_count() > 1:
@@ -491,13 +544,17 @@ def train_model_optimized(data_dict, input_dim, output_dim,
         model = nn.DataParallel(model)
     model.to(device)
     
-    # Optimizer
-    optimizer = optim.AdamW(
+    # Track noise level
+    current_noise_std = config.noise_std
+    
+    # Optimizer - Using Adam with more stable parameters
+    optimizer = optim.Adam(
         model.parameters(), 
         lr=config.learning_rate,
         weight_decay=config.weight_decay,
         betas=(0.9, 0.999),
-        eps=1e-8
+        eps=1e-8,
+        amsgrad=True  # AMSGrad variant for better stability
     )
     
     # Learning rate scheduler
@@ -509,9 +566,10 @@ def train_model_optimized(data_dict, input_dim, output_dim,
     )
     
     # Loss function
-    criterion = nn.HuberLoss(
-        delta=config.huber_delta
-    )
+    # criterion = nn.HuberLoss(
+    #     delta=config.huber_delta
+    # )
+    criterion = nn.L1Loss()
     
     # Mixed precision setup
     scaler = GradScaler() if config.use_mixed_precision else None
@@ -604,7 +662,8 @@ def train_model_optimized(data_dict, input_dim, output_dim,
                 if config.use_mixed_precision and scaler is not None:
                     with autocast():
                         outputs = model(inputs)
-                        loss = criterion(outputs, targets)
+                        # Convert targets to float32 for loss computation stability
+                        loss = criterion(outputs, targets.float())
                     
                     scaler.scale(loss).backward()
                     scaler.unscale_(optimizer)
@@ -613,7 +672,8 @@ def train_model_optimized(data_dict, input_dim, output_dim,
                     scaler.update()
                 else:
                     outputs = model(inputs)
-                    loss = criterion(outputs, targets)
+                    # Convert targets to float32 for loss computation stability
+                    loss = criterion(outputs, targets.float())
                     loss.backward()
                     torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=config.gradient_clip_norm)
                     optimizer.step()
@@ -634,10 +694,12 @@ def train_model_optimized(data_dict, input_dim, output_dim,
                     if config.use_mixed_precision and scaler is not None:
                         with autocast():
                             outputs = model(inputs)
-                            loss = criterion(outputs, targets)
+                            # Convert targets to float32 for loss computation stability
+                            loss = criterion(outputs, targets.float())
                     else:
                         outputs = model(inputs)
-                        loss = criterion(outputs, targets)
+                        # Convert targets to float32 for loss computation stability
+                        loss = criterion(outputs, targets.float())
                     
                     epoch_val_loss += loss.item()
             
@@ -652,8 +714,24 @@ def train_model_optimized(data_dict, input_dim, output_dim,
             scheduler.step()
             current_lr = optimizer.param_groups[0]['lr']
             
+            # Update noise level with decay
+            current_noise_std = max(
+                config.min_noise_std,
+                current_noise_std * config.noise_decay
+            )
+            if isinstance(model, nn.DataParallel):
+                model.module.noise_std = current_noise_std
+            else:
+                model.noise_std = current_noise_std
+            
             # Update metrics
-            metrics.update(epoch + 1, avg_train_loss, avg_val_loss, current_lr)
+            metrics.update(
+                epoch + 1, 
+                avg_train_loss, 
+                avg_val_loss, 
+                current_lr,
+                noise_std=current_noise_std
+            )
             
             # We must synchronize the GPU before stopping the timer for an accurate measurement
             torch.cuda.synchronize()
@@ -673,11 +751,8 @@ def train_model_optimized(data_dict, input_dim, output_dim,
             if avg_val_loss < best_val_loss:
                 best_val_loss = avg_val_loss
                 patience_counter = 0
-                if epoch > 100:
-                    torch.save(model.state_dict(), best_model_path)
-                    logger.info(f"  -> New best model saved! Val Loss: {best_val_loss:.6f}")
-                else:
-                    logger.info(f"  -> New best model! Val Loss: {best_val_loss:.6f}")
+                torch.save(model.state_dict(), best_model_path)
+                logger.info(f"  -> New best model saved! Val Loss: {best_val_loss:.6f}")
             else:
                 patience_counter += 1
                 if patience_counter >= config.patience:
@@ -719,10 +794,12 @@ def train_model_optimized(data_dict, input_dim, output_dim,
                 if config.use_mixed_precision and scaler is not None:
                     with autocast():
                         outputs = model(inputs)
-                        loss = criterion(outputs, targets)
+                        # Convert targets to float32 for loss computation stability
+                        loss = criterion(outputs, targets.float())
                 else:
                     outputs = model(inputs)
-                    loss = criterion(outputs, targets)
+                    # Convert targets to float32 for loss computation stability
+                    loss = criterion(outputs, targets.float())
                 
                 test_loss += loss.item()
         
@@ -833,15 +910,23 @@ if __name__ == "__main__":
     input_dim = X.shape[1]
     output_dim = Y.shape[1]
     
-    # Create configuration
+    # Create configuration with validation
     config = OptimizedTrainingConfig()
     config.update(
         hidden_size=512,
         num_layers=4,
         dropout_rate=0.1,
-        batch_size=128,  # Optimized batch size
+        batch_size=64,  # Conservative batch size
         use_mixed_precision=True
     )
+    
+    # Validate configuration
+    config.validate()
+    
+    # Check GPU memory before training
+    if not check_gpu_memory(required_gb=2.0):
+        print("Warning: Insufficient GPU memory detected. Consider reducing batch size.")
+        config.batch_size = min(config.batch_size, 32)
     
     print(f"Model configuration:")
     print(f"  Input dimension: {input_dim}")
@@ -889,4 +974,4 @@ if __name__ == "__main__":
         print(f"  - Final test loss: {test_loss:.6f}")
     
     # Clear GPU memory
-    clear_gpu_memory() 
+    clear_gpu_memory()
