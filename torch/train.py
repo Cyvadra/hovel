@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import DataLoader, TensorDataset, random_split
+from torch.utils.data import DataLoader, TensorDataset
 import numpy as np
 import matplotlib.pyplot as plt
 import h5py
@@ -306,7 +306,8 @@ class ImprovedModel(nn.Module):
 # --- 3. Improved Training Setup ---
 def setup_training(X, Y, batch_size=32, val_split=0.1, test_split=0.1, num_workers=4):
     """
-    Prepares PyTorch DataLoaders with proper train/val/test split.
+    Prepares PyTorch DataLoaders with chronological train/val/test split.
+    Uses earliest 10% as test set, next 10% as validation set, latest 80% as training set.
 
     Args:
         X (np.ndarray): Input features.
@@ -332,11 +333,16 @@ def setup_training(X, Y, batch_size=32, val_split=0.1, test_split=0.1, num_worke
     val_size = int(val_split * total_size)
     train_size = total_size - test_size - val_size
     
-    # Split the dataset
-    train_set, val_set, test_set = random_split(
-        dataset, [train_size, val_size, test_size],
-        generator=torch.Generator().manual_seed(42)
-    )
+    # Chronological split: earliest 10% test, next 10% val, latest 80% train
+    test_indices = list(range(0, test_size))
+    val_indices = list(range(test_size, test_size + val_size))
+    train_indices = list(range(test_size + val_size, total_size))
+    
+    # Create subset datasets using indices
+    from torch.utils.data import Subset
+    test_set = Subset(dataset, test_indices)
+    val_set = Subset(dataset, val_indices)
+    train_set = Subset(dataset, train_indices)
     
     # Create data loaders with improved settings
     train_loader = DataLoader(
@@ -364,7 +370,7 @@ def setup_training(X, Y, batch_size=32, val_split=0.1, test_split=0.1, num_worke
         persistent_workers=True if num_workers > 0 else False
     )
     
-    print(f"Dataset split - Train: {train_size}, Val: {val_size}, Test: {test_size}")
+    print(f"Dataset split (chronological) - Test: {test_size} (earliest 10%), Val: {val_size} (next 10%), Train: {train_size} (latest 80%)")
     print(f"Data loading with {num_workers} workers")
     
     return train_loader, val_loader, test_loader
