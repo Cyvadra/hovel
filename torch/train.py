@@ -9,7 +9,6 @@ import re
 from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
 from torch.nn import functional as F
 import warnings
-from torch.cuda.amp import GradScaler, autocast
 import logging
 import time
 from collections import defaultdict
@@ -84,8 +83,7 @@ def load_checkpoint(checkpoint_path, model, optimizer, scheduler, device):
             'best_val_loss': checkpoint.get('best_val_loss', float('inf')),
             'patience_counter': checkpoint.get('patience_counter', 0),
             'train_losses': checkpoint.get('train_losses', []),
-            'val_losses': checkpoint.get('val_losses', []),
-            'scaler_state_dict': checkpoint.get('scaler_state_dict', None)
+            'val_losses': checkpoint.get('val_losses', [])
         }
         
         print(f"Loaded training state from epoch {training_state['epoch']}")
@@ -99,15 +97,14 @@ def load_checkpoint(checkpoint_path, model, optimizer, scheduler, device):
             'best_val_loss': float('inf'),
             'patience_counter': 0,
             'train_losses': [],
-            'val_losses': [],
-            'scaler_state_dict': None
+            'val_losses': []
         }
         print("Loaded model state only (old checkpoint format)")
     
     return training_state
 
 def save_checkpoint(model, optimizer, scheduler, epoch, best_val_loss, 
-                   patience_counter, train_losses, val_losses, scaler, 
+                   patience_counter, train_losses, val_losses,
                    model_name="optimized_model"):
     """
     Save a complete checkpoint with model and training state.
@@ -132,8 +129,7 @@ def save_checkpoint(model, optimizer, scheduler, epoch, best_val_loss,
         'best_val_loss': best_val_loss,
         'patience_counter': patience_counter,
         'train_losses': train_losses,
-        'val_losses': val_losses,
-        'scaler_state_dict': scaler.state_dict() if scaler is not None else None
+        'val_losses': val_losses
     }
     
     checkpoint_path = f'{model_name}_checkpoint_epoch_{epoch}.pth'
@@ -235,9 +231,6 @@ class OptimizedTrainingConfig:
         self.scheduler_t_mult = 2
         self.scheduler_eta_min = 1e-6
         
-        # Mixed precision and data type optimization
-        self.use_mixed_precision = True  # Uses Float16 data loading for memory efficiency
-        
         # Model saving
         self.save_checkpoint_every = 20
     
@@ -327,8 +320,8 @@ def load_and_preprocess_data(file_path='training_data.h5'):
     try:
         with h5py.File(file_path, 'r') as f:
             # Load X and Y, converting to float16 for memory efficiency
-            X = np.array(f['X'][:], dtype=np.float16)
-            Y = np.array(f['Y'][:], dtype=np.float16)
+            X = np.array(f['X'][:], dtype=np.float32)
+            Y = np.array(f['Y'][:], dtype=np.float32)
             T = np.array(f['T'][:], dtype=np.int32)
 
             # Transpose if the first dimension is smaller than the second
@@ -368,9 +361,9 @@ def prepare_optimized_data(X, Y, T, batch_size, val_split=0.05, test_split=0.05,
     if device is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
-    # Convert to tensors and move to GPU, using half precision for memory efficiency
-    X_tensor = torch.from_numpy(X).half().to(device)
-    Y_tensor = torch.from_numpy(Y).half().to(device)
+    # Convert to tensors and move to GPU
+    X_tensor = torch.from_numpy(X).to(device)
+    Y_tensor = torch.from_numpy(Y).to(device)
     
     # Calculate split sizes
     total_size = len(X_tensor)
@@ -469,9 +462,6 @@ class OptimizedModel(nn.Module):
         Returns:
             torch.Tensor: Output tensor of shape (batch_size, output_dim)
         """
-        # Convert input to float32 for computation
-        x = x.float()
-        
         # Input projection with noise
         x = self.input_proj(x)
         x = self.input_norm(x)
@@ -501,8 +491,7 @@ class OptimizedModel(nn.Module):
         
         x = self.output_proj(x)
         
-        # Convert back to half precision for memory efficiency
-        return x.half()
+        return x
 
 # --- Optimized Loss Functions ---
 # Using PyTorch's built-in L1Loss (Mean Absolute Error)
@@ -571,8 +560,6 @@ def train_model_optimized(data_dict, input_dim, output_dim,
     # )
     criterion = nn.L1Loss()
     
-    # Mixed precision setup
-    scaler = GradScaler() if config.use_mixed_precision else None
     
     # Check for existing checkpoints and load if found
     checkpoint_path, checkpoint_epoch = find_latest_checkpoint(model_name)
@@ -659,24 +646,11 @@ def train_model_optimized(data_dict, input_dim, output_dim,
                 inputs = X_train[start_idx:end_idx]
                 targets = Y_train[start_idx:end_idx]
                 
-                if config.use_mixed_precision and scaler is not None:
-                    with autocast():
-                        outputs = model(inputs)
-                        # Convert targets to float32 for loss computation stability
-                        loss = criterion(outputs, targets.float())
-                    
-                    scaler.scale(loss).backward()
-                    scaler.unscale_(optimizer)
-                    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=config.gradient_clip_norm)
-                    scaler.step(optimizer)
-                    scaler.update()
-                else:
-                    outputs = model(inputs)
-                    # Convert targets to float32 for loss computation stability
-                    loss = criterion(outputs, targets.float())
-                    loss.backward()
-                    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=config.gradient_clip_norm)
-                    optimizer.step()
+                outputs = model(inputs)
+                loss = criterion(outputs, targets)
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=config.gradient_clip_norm)
+                optimizer.step()
                 
                 epoch_train_loss += loss.item()
             
@@ -791,15 +765,8 @@ def train_model_optimized(data_dict, input_dim, output_dim,
                 inputs = X_test[start_idx:end_idx]
                 targets = Y_test[start_idx:end_idx]
                 
-                if config.use_mixed_precision and scaler is not None:
-                    with autocast():
-                        outputs = model(inputs)
-                        # Convert targets to float32 for loss computation stability
-                        loss = criterion(outputs, targets.float())
-                else:
-                    outputs = model(inputs)
-                    # Convert targets to float32 for loss computation stability
-                    loss = criterion(outputs, targets.float())
+                outputs = model(inputs)
+                loss = criterion(outputs, targets)
                 
                 test_loss += loss.item()
         
@@ -916,8 +883,7 @@ if __name__ == "__main__":
         hidden_size=512,
         num_layers=4,
         dropout_rate=0.1,
-        batch_size=64,  # Conservative batch size
-        use_mixed_precision=True
+        batch_size=64  # Conservative batch size
     )
     
     # Validate configuration
@@ -936,7 +902,6 @@ if __name__ == "__main__":
     print(f"  Number of layers: {config.num_layers}")
     print(f"  Dropout rate: {config.dropout_rate}")
     print(f"  Batch size: {config.batch_size}")
-    print(f"  Mixed precision: {config.use_mixed_precision}")
     
     # Setup GPU
     device = setup_gpu()
