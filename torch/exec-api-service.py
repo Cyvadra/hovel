@@ -196,6 +196,7 @@ class ModelManager:
                 output_dim=self.output_dim,
                 hidden_size=self.hidden_size,
                 num_layers=self.num_layers,
+                noise_std=0.001
             )
             
             # Load the state dict

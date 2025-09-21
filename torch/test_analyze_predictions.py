@@ -71,56 +71,107 @@ def calculate_sign_match_rate(actual: np.ndarray, predicted: np.ndarray) -> floa
     matches = (actual_signs == predicted_signs)
     return np.mean(matches)
 
-def analyze_predictions_by_confidence(
+def analyze_predictions_by_time(
     actual: np.ndarray,
     predicted: np.ndarray,
     confidences: np.ndarray,
-    n_intervals: int = 20
+    timestamps: np.ndarray,
+    n_intervals: int = 50
 ) -> None:
     """
-    Analyze predictions by dividing them into confidence intervals.
+    Analyze predictions by dividing them into time intervals.
     
     Args:
         actual: Array of actual values (n_samples, n_targets)
         predicted: Array of predicted values (n_samples, n_targets)
         confidences: Array of confidence scores (n_samples,)
-        n_intervals: Number of intervals to divide the confidence range into
-    """
-    # Calculate percentile boundaries (5%, 10%, ..., 95%, 100%)
-    percentiles = np.linspace(0, 100, n_intervals + 1)
-    confidence_boundaries = np.percentile(confidences, percentiles)
+        timestamps: Array of timestamps (n_samples,)
+        n_intervals: Number of intervals to divide the time range into (default: 50 for 2% time windows)
     
-    print("\nAnalysis by Confidence Intervals:")
-    print("=" * 60)
-    print(f"{'Interval':>10} {'Conf Range':>20} {'Avg Conf':>10} {'Sign Match':>10}")
-    print("-" * 60)
+    Raises:
+        ValueError: If input arrays have incompatible shapes or dimensions
+    """
+    # Validate input array shapes
+    if not isinstance(actual, np.ndarray) or not isinstance(predicted, np.ndarray) or \
+       not isinstance(confidences, np.ndarray) or not isinstance(timestamps, np.ndarray):
+        raise ValueError("All inputs must be numpy arrays")
+        
+    if actual.shape[0] != predicted.shape[0] or \
+       actual.shape[0] != confidences.shape[0] or \
+       actual.shape[0] != timestamps.shape[0]:
+        raise ValueError(
+            f"All arrays must have same number of samples. Got shapes: "
+            f"actual={actual.shape}, predicted={predicted.shape}, "
+            f"confidences={confidences.shape}, timestamps={timestamps.shape}"
+        )
+    # Print initial shapes for debugging
+    # print(f"\nInitial shapes:")
+    # print(f"actual: {actual.shape}")
+    # print(f"predicted: {predicted.shape}")
+    # print(f"confidences: {confidences.shape}")
+    # print(f"timestamps: {timestamps.shape}")
+    
+    # Ensure timestamps is 1D
+    if len(timestamps.shape) > 1:
+        timestamps = timestamps.ravel()
+    
+    # Sort all data by timestamps
+    sort_indices = np.argsort(timestamps)
+    timestamps = timestamps[sort_indices]
+    actual = actual[sort_indices]
+    predicted = predicted[sort_indices]
+    confidences = confidences[sort_indices]
+    
+    # Reshape arrays if needed to ensure proper broadcasting
+    if len(actual.shape) > 2:
+        actual = actual.reshape(actual.shape[0], -1)
+    if len(predicted.shape) > 2:
+        predicted = predicted.reshape(predicted.shape[0], -1)
+    
+    # Calculate time boundaries for equal-sized intervals
+    time_boundaries = np.linspace(timestamps.min(), timestamps.max(), n_intervals + 1)
+    
+    print("\nAnalysis by Time Intervals:")
+    print("=" * 70)
+    print(f"{'Interval':>10} {'Time Range':>25} {'Avg Conf':>10} {'Sign Match':>10} {'Count':>8}")
+    print("-" * 70)
     
     for i in range(n_intervals):
-        # Get data for current interval
+        # Get data for current time interval
         if i == n_intervals - 1:
-            mask = (confidences >= confidence_boundaries[i])
+            mask = (timestamps >= time_boundaries[i])
         else:
-            mask = (confidences >= confidence_boundaries[i]) & (confidences < confidence_boundaries[i+1])
+            mask = (timestamps >= time_boundaries[i]) & (timestamps < time_boundaries[i+1])
         
         if not np.any(mask):
             continue
         
+        # Expand mask to match array dimensions if needed
+        mask_idx = np.where(mask)[0]
+        
         # Calculate metrics for this interval
-        interval_confidences = confidences[mask]
-        interval_actual = actual[mask]
-        interval_predicted = predicted[mask]
+        interval_actual = actual[mask_idx]
+        interval_predicted = predicted[mask_idx]
+        interval_confidences = confidences[mask_idx]  # Confidence scores are 1D array
+        
+        # print(f"\nInterval {i+1} data shapes:")
+        # print(f"  actual: {interval_actual.shape}")
+        # print(f"  predicted: {interval_predicted.shape}")
+        # print(f"  confidences: {interval_confidences.shape}")
+        # print(f"  mask indices: {len(mask_idx)}")
         
         avg_confidence = np.mean(interval_confidences)
         sign_match_rate = calculate_sign_match_rate(interval_actual, interval_predicted)
+        sample_count = len(interval_actual)
         
         # Print results
         interval_str = f"{i+1}/{n_intervals}"
-        conf_range = f"{confidence_boundaries[i]:.3f}-{confidence_boundaries[i+1]:.3f}"
-        print(f"{interval_str:>10} {conf_range:>20} {avg_confidence:>10.3f} {sign_match_rate:>10.3f}")
+        time_range = f"{time_boundaries[i]:.0f}-{time_boundaries[i+1]:.0f}"
+        print(f"{interval_str:>10} {time_range:>25} {avg_confidence:>10.3f} {sign_match_rate:>10.3f} {sample_count:>8}")
 
 def main():
     """Main function to analyze model predictions."""
-    print("Analyzing Model Predictions Across Confidence Intervals")
+    print("Analyzing Model Predictions Across Time Intervals")
     print("=" * 50)
     
     # Initialize client
@@ -152,9 +203,9 @@ def main():
     predictions = np.array(result['predictions'])
     confidence_scores = np.array(result['confidences'])
     
-    # Analyze predictions by confidence intervals
-    print("\n3. Analyzing predictions by confidence intervals...")
-    analyze_predictions_by_confidence(Y, predictions, confidence_scores)
+    # Analyze predictions by time intervals
+    print("\n3. Analyzing predictions by time intervals...")
+    analyze_predictions_by_time(Y, predictions, confidence_scores, T)
     
     print("\nAnalysis complete!")
 
