@@ -144,6 +144,7 @@ def save_checkpoint(model, optimizer, scheduler, epoch, best_val_loss,
             'hidden_size': model_instance.hidden_size,
             'num_layers': len(model_instance.layers)
         }
+    }
     
     checkpoint_path = f'{model_name}_checkpoint_epoch_{epoch}.pth'
     torch.save(checkpoint, checkpoint_path)
