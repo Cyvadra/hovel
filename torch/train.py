@@ -224,65 +224,63 @@ class OptimizedTrainingConfig:
     """Optimized configuration for training parameters with noise regularization."""
     
     def __init__(self):
-        # Model parameters - optimized defaults
-        self.hidden_size = 1536
-        self.num_layers = 12
-        self.noise_std = 0.03  # 降低初始噪声标准差
-        self.noise_decay = 0.98  # 加快噪声衰减速度
-        self.min_noise_std = 0.0001  # 降低最小噪声水平
+        # Model parameters
+        self.hidden_size = None
+        self.num_layers = None
+        self.noise_std = None
+        self.noise_decay = None
+        self.min_noise_std = None
         
-        # Training parameters - adjusted for better convergence
-        self.batch_size = 32  # 减小batch size以增加更新频率
-        self.gradient_accumulation_steps = 2  # 减少梯度累积步数
+        # Training parameters
+        self.batch_size = None
+        self.gradient_accumulation_steps = None
         self._effective_batch_size = None  # Will be calculated on demand
-        self.learning_rate = 1e-4  # 提高学习率以避免陷入局部最小值
-        self.weight_decay = 1e-5  # 降低L2正则化强度
-        self.min_epochs = 50  # 减少最小训练轮数
-        self.max_epochs = 200  # 适当减少最大训练轮数
-        self.patience = 20  # 减少早停耐心值
-        self.gradient_clip_norm = 1.0  # 放宽梯度裁剪范围
-        self.mixup_alpha = 0.2  # Mixup interpolation factor
+        self.learning_rate = None
+        self.weight_decay = None
+        self.min_epochs = None
+        self.max_epochs = None
+        self.patience = None
+        self.gradient_clip_norm = None
+        self.mixup_alpha = None
         
         # Data parameters
-        self.val_split = 0.1  # Increased for better validation
-        self.test_split = 0.1  # Increased for better testing
+        self.val_split = None
+        self.test_split = None
         
-        # Loss parameters (removed huber_delta - using L1Loss now)
-        
-        # Scheduler parameters - improved defaults
-        self.scheduler_t0 = 10  # Reduced for faster warmup
-        self.scheduler_t_mult = 2
-        self.scheduler_eta_min = 1e-6
+        # Scheduler parameters
+        self.scheduler_t0 = None
+        self.scheduler_t_mult = None
+        self.scheduler_eta_min = None
         
         # SWA parameters
-        self.swa_start = 50  # Start SWA after this many epochs
-        self.swa_lr = 1e-4  # SWA learning rate
-        self.swa_freq = 5  # Frequency of model averaging
-        self.swa_anneal_epochs = 10  # Number of epochs to anneal for SWA
-        self.swa_anneal_strategy = 'cos'  # Annealing strategy ('cos' or 'linear')
+        self.swa_start = None
+        self.swa_lr = None
+        self.swa_freq = None
+        self.swa_anneal_epochs = None
+        self.swa_anneal_strategy = None
         
         # Learning rate warmup parameters
-        self.warmup_epochs = 10  # Number of epochs for warmup
-        self.warmup_start_lr = 1e-7  # Starting learning rate for warmup
+        self.warmup_epochs = None
+        self.warmup_start_lr = None
         
         # EMA parameters
-        self.ema_decay = 0.999  # EMA decay rate
-        self.ema_start = 20  # Start EMA after this many epochs
+        self.ema_decay = None
+        self.ema_start = None
         
         # Adaptive noise parameters
-        self.adaptive_noise = True  # Enable adaptive noise scaling
-        self.noise_grad_threshold = 1.0  # Gradient norm threshold for noise scaling
-        self.noise_scale_factor = 0.1  # Scaling factor for adaptive noise
+        self.adaptive_noise = None
+        self.noise_grad_threshold = None
+        self.noise_scale_factor = None
         
         # Dynamic validation parameters
-        self.dynamic_val_freq = True  # Enable dynamic validation frequency
-        self.min_val_freq = 1  # Minimum validation frequency (every N epochs)
-        self.max_val_freq = 5  # Maximum validation frequency (every N epochs)
-        self.val_stability_threshold = 0.01  # Threshold for considering training stable
+        self.dynamic_val_freq = None
+        self.min_val_freq = None
+        self.max_val_freq = None
+        self.val_stability_threshold = None
         
         # Model saving
-        self.save_checkpoint_every = 2
-        self.save_after_epoch = 0  # 在多少个epoch之后开始保存模型权重，0表示从开始就保存
+        self.save_checkpoint_every = None
+        self.save_after_epoch = None
     
     def update(self, **kwargs):
         """Update configuration with new parameters."""
@@ -476,7 +474,7 @@ class OptimizedModel(nn.Module):
     """
     Optimized neural network with noise regularization and advanced techniques to prevent overfitting.
     """
-    def __init__(self, input_dim, output_dim, hidden_size=128, num_layers=8, noise_std=0.03):
+    def __init__(self, input_dim, output_dim, hidden_size, num_layers, noise_std):
         super().__init__()
         self.input_dim = input_dim
         self.output_dim = output_dim
@@ -579,12 +577,12 @@ class ConfidenceWeightedLoss(nn.Module):
     2. 引导置信度向目标值(0.2)靠近
     3. 平滑的权重过渡
     """
-    def __init__(self, confidence_threshold=0.5, alpha=0.1, beta=0.05, target_confidence=0.2):
+    def __init__(self, confidence_threshold, alpha, beta, target_confidence):
         super().__init__()
         self.confidence_threshold = confidence_threshold  # 置信度阈值
         self.alpha = alpha  # 置信度正则化系数
         self.beta = beta   # 阈值损失系数
-        self.target_confidence = target_confidence  # 目标置信度值(0.2)
+        self.target_confidence = target_confidence  # 目标置信度值
         self.base_criterion = nn.L1Loss(reduction='none')  # 基础损失函数
         
     def forward(self, outputs, targets):
@@ -735,10 +733,10 @@ def train_model_optimized(data_dict, input_dim, output_dim,
     
     # Loss function with confidence weighting
     criterion = ConfidenceWeightedLoss(
-        confidence_threshold=0.6,  # 降低置信度阈值，使其更接近目标值
-        alpha=0.2,                 # 增加置信度正则化系数，加强对置信度的约束
-        beta=0.1,                  # 增加阈值损失系数，加强对预测值的约束
-        target_confidence=0.6      # 提高目标置信度，避免模型过度保守
+        confidence_threshold=args.confidence_threshold,
+        alpha=args.confidence_alpha,
+        beta=args.confidence_beta,
+        target_confidence=args.target_confidence
     )
     
     
@@ -1512,18 +1510,24 @@ def parse_args():
     # Model architecture
     parser.add_argument('--hidden_size', type=int, default=1536,
                       help='Hidden size for the model (default: 1536)')
-    parser.add_argument('--num_layers', type=int, default=14,
-                      help='Number of layers in the model (default: 14)')
+    parser.add_argument('--num_layers', type=int, default=12,
+                      help='Number of layers in the model (default: 12)')
     
     # Training parameters
     parser.add_argument('--batch_size', type=int, default=32,
                       help='Batch size for training (default: 32)')
-    parser.add_argument('--min_epochs', type=int, default=300,
-                      help='Minimum number of epochs to train (default: 300)')
-    parser.add_argument('--max_epochs', type=int, default=500,
-                      help='Maximum number of epochs to train (default: 500)')
-    parser.add_argument('--patience', type=int, default=40,
-                      help='Patience for early stopping (default: 40)')
+    parser.add_argument('--gradient_accumulation_steps', type=int, default=2,
+                      help='Number of gradient accumulation steps (default: 2)')
+    parser.add_argument('--min_epochs', type=int, default=50,
+                      help='Minimum number of epochs to train (default: 50)')
+    parser.add_argument('--max_epochs', type=int, default=200,
+                      help='Maximum number of epochs to train (default: 200)')
+    parser.add_argument('--patience', type=int, default=20,
+                      help='Patience for early stopping (default: 20)')
+    parser.add_argument('--gradient_clip_norm', type=float, default=1.0,
+                      help='Gradient clipping norm (default: 1.0)')
+    parser.add_argument('--mixup_alpha', type=float, default=0.2,
+                      help='Mixup interpolation factor (default: 0.2)')
     
     # Learning rate parameters
     parser.add_argument('--learning_rate', type=float, default=1e-4,
@@ -1532,24 +1536,88 @@ def parse_args():
                       help='Weight decay for optimizer (default: 1e-5)')
     
     # Data split parameters
-    parser.add_argument('--val_split', type=float, default=0.15,
-                      help='Validation split ratio (default: 0.15)')
-    parser.add_argument('--test_split', type=float, default=0.05,
-                      help='Test split ratio (default: 0.05)')
+    parser.add_argument('--val_split', type=float, default=0.1,
+                      help='Validation split ratio (default: 0.1)')
+    parser.add_argument('--test_split', type=float, default=0.1,
+                      help='Test split ratio (default: 0.1)')
     
     # Noise parameters
     parser.add_argument('--noise_std', type=float, default=0.03,
                       help='Initial noise standard deviation (default: 0.03)')
     parser.add_argument('--noise_decay', type=float, default=0.98,
                       help='Noise decay rate per epoch (default: 0.98)')
+    parser.add_argument('--min_noise_std', type=float, default=0.0001,
+                      help='Minimum noise standard deviation (default: 0.0001)')
+    
+    # Scheduler parameters
+    parser.add_argument('--scheduler_t0', type=int, default=10,
+                      help='Initial cycle length for cosine annealing (default: 10)')
+    parser.add_argument('--scheduler_t_mult', type=int, default=2,
+                      help='Cycle length multiplier (default: 2)')
+    parser.add_argument('--scheduler_eta_min', type=float, default=1e-6,
+                      help='Minimum learning rate for scheduler (default: 1e-6)')
+    
+    # SWA parameters
+    parser.add_argument('--swa_start', type=int, default=50,
+                      help='Epoch to start SWA from (default: 50)')
+    parser.add_argument('--swa_lr', type=float, default=1e-4,
+                      help='SWA learning rate (default: 1e-4)')
+    parser.add_argument('--swa_freq', type=int, default=5,
+                      help='SWA model update frequency (default: 5)')
+    parser.add_argument('--swa_anneal_epochs', type=int, default=10,
+                      help='Number of epochs to anneal for SWA (default: 10)')
+    parser.add_argument('--swa_anneal_strategy', type=str, default='cos',
+                      help='SWA annealing strategy (default: cos)')
+    
+    # Learning rate warmup parameters
+    parser.add_argument('--warmup_epochs', type=int, default=10,
+                      help='Number of warmup epochs (default: 10)')
+    parser.add_argument('--warmup_start_lr', type=float, default=1e-7,
+                      help='Starting learning rate for warmup (default: 1e-7)')
+    
+    # EMA parameters
+    parser.add_argument('--ema_decay', type=float, default=0.999,
+                      help='EMA decay rate (default: 0.999)')
+    parser.add_argument('--ema_start', type=int, default=20,
+                      help='Epoch to start EMA from (default: 20)')
+    
+    # Adaptive noise parameters
+    parser.add_argument('--adaptive_noise', type=bool, default=True,
+                      help='Enable adaptive noise scaling (default: True)')
+    parser.add_argument('--noise_grad_threshold', type=float, default=1.0,
+                      help='Gradient norm threshold for noise scaling (default: 1.0)')
+    parser.add_argument('--noise_scale_factor', type=float, default=0.1,
+                      help='Scaling factor for adaptive noise (default: 0.1)')
+    
+    # Dynamic validation parameters
+    parser.add_argument('--dynamic_val_freq', type=bool, default=True,
+                      help='Enable dynamic validation frequency (default: True)')
+    parser.add_argument('--min_val_freq', type=int, default=1,
+                      help='Minimum validation frequency (default: 1)')
+    parser.add_argument('--max_val_freq', type=int, default=5,
+                      help='Maximum validation frequency (default: 5)')
+    parser.add_argument('--val_stability_threshold', type=float, default=0.01,
+                      help='Threshold for considering training stable (default: 0.01)')
     
     # Model saving parameters
+    parser.add_argument('--save_checkpoint_every', type=int, default=2,
+                      help='Save checkpoint every N epochs (default: 2)')
     parser.add_argument('--save_after_epoch', type=int, default=0,
-                      help='Start saving model weights after this epoch (default: 0, save from start)')
+                      help='Start saving model weights after this epoch (default: 0)')
     
     # Model name
     parser.add_argument('--model_name', type=str, default="optimized_model",
                       help='Base name for saved model files (default: optimized_model)')
+    
+    # Confidence weighted loss parameters
+    parser.add_argument('--confidence_threshold', type=float, default=0.6,
+                      help='Confidence threshold for loss weighting (default: 0.6)')
+    parser.add_argument('--confidence_alpha', type=float, default=0.2,
+                      help='Alpha coefficient for confidence regularization (default: 0.2)')
+    parser.add_argument('--confidence_beta', type=float, default=0.1,
+                      help='Beta coefficient for threshold loss (default: 0.1)')
+    parser.add_argument('--target_confidence', type=float, default=0.6,
+                      help='Target confidence value (default: 0.6)')
     
     return parser.parse_args()
 
@@ -1570,18 +1638,61 @@ if __name__ == "__main__":
     # Create configuration with validation
     config = OptimizedTrainingConfig()
     config.update(
+        # Model parameters
         hidden_size=args.hidden_size,
         num_layers=args.num_layers,
+        noise_std=args.noise_std,
+        noise_decay=args.noise_decay,
+        min_noise_std=args.min_noise_std,
+        
+        # Training parameters
         batch_size=args.batch_size,
+        gradient_accumulation_steps=args.gradient_accumulation_steps,
+        learning_rate=args.learning_rate,
+        weight_decay=args.weight_decay,
         min_epochs=args.min_epochs,
         max_epochs=args.max_epochs,
         patience=args.patience,
-        learning_rate=args.learning_rate,
-        weight_decay=args.weight_decay,
+        gradient_clip_norm=args.gradient_clip_norm,
+        mixup_alpha=args.mixup_alpha,
+        
+        # Data parameters
         val_split=args.val_split,
         test_split=args.test_split,
-        noise_std=args.noise_std,
-        noise_decay=args.noise_decay,
+        
+        # Scheduler parameters
+        scheduler_t0=args.scheduler_t0,
+        scheduler_t_mult=args.scheduler_t_mult,
+        scheduler_eta_min=args.scheduler_eta_min,
+        
+        # SWA parameters
+        swa_start=args.swa_start,
+        swa_lr=args.swa_lr,
+        swa_freq=args.swa_freq,
+        swa_anneal_epochs=args.swa_anneal_epochs,
+        swa_anneal_strategy=args.swa_anneal_strategy,
+        
+        # Learning rate warmup parameters
+        warmup_epochs=args.warmup_epochs,
+        warmup_start_lr=args.warmup_start_lr,
+        
+        # EMA parameters
+        ema_decay=args.ema_decay,
+        ema_start=args.ema_start,
+        
+        # Adaptive noise parameters
+        adaptive_noise=args.adaptive_noise,
+        noise_grad_threshold=args.noise_grad_threshold,
+        noise_scale_factor=args.noise_scale_factor,
+        
+        # Dynamic validation parameters
+        dynamic_val_freq=args.dynamic_val_freq,
+        min_val_freq=args.min_val_freq,
+        max_val_freq=args.max_val_freq,
+        val_stability_threshold=args.val_stability_threshold,
+        
+        # Model saving parameters
+        save_checkpoint_every=args.save_checkpoint_every,
         save_after_epoch=args.save_after_epoch
     )
     
