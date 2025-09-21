@@ -281,7 +281,7 @@ class OptimizedTrainingConfig:
         self.val_stability_threshold = 0.01  # Threshold for considering training stable
         
         # Model saving
-        self.save_checkpoint_every = 20
+        self.save_checkpoint_every = 2
         self.save_after_epoch = 0  # 在多少个epoch之后开始保存模型权重，0表示从开始就保存
     
     def update(self, **kwargs):
@@ -967,22 +967,27 @@ def train_model_optimized(data_dict, input_dim, output_dim,
             if avg_val_loss < best_val_loss:
                 best_val_loss = avg_val_loss
                 patience_counter = 0
-                # Save best model with parameters
-                if isinstance(model, nn.DataParallel):
-                    model_instance = model.module
+                
+                # Only save best model if we're past save_after_epoch
+                if epoch + 1 > config.save_after_epoch:
+                    # Save best model with parameters
+                    if isinstance(model, nn.DataParallel):
+                        model_instance = model.module
+                    else:
+                        model_instance = model
+                        
+                    torch.save({
+                        'model_state_dict': model.state_dict(),
+                        'model_params': {
+                            'input_dim': model_instance.input_dim,
+                            'output_dim': model_instance.output_dim,
+                            'hidden_size': model_instance.hidden_size,
+                            'num_layers': len(model_instance.layers)
+                        }
+                    }, best_model_path)
+                    logger.info(f"  -> New best model saved! Val Loss: {best_val_loss:.6f}")
                 else:
-                    model_instance = model
-                    
-                torch.save({
-                    'model_state_dict': model.state_dict(),
-                    'model_params': {
-                        'input_dim': model_instance.input_dim,
-                        'output_dim': model_instance.output_dim,
-                        'hidden_size': model_instance.hidden_size,
-                        'num_layers': len(model_instance.layers)
-                    }
-                }, best_model_path)
-                logger.info(f"  -> New best model saved! Val Loss: {best_val_loss:.6f}")
+                    logger.info(f"  -> New best val loss: {best_val_loss:.6f} (not saving model until after epoch {config.save_after_epoch})")
             else:
                 patience_counter += 1
                 # Only apply early stopping after min_epochs have been reached
