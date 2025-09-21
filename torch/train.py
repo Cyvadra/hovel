@@ -1026,7 +1026,13 @@ def train_model_optimized(data_dict, input_dim, output_dim,
         
         # Load the best model for comparison
         logger.info("Loading the best model state for comparison.")
-        state_dict = torch.load(best_model_path, map_location=device)
+        checkpoint = torch.load(best_model_path, map_location=device)
+        if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
+            state_dict = checkpoint['model_state_dict']
+        else:
+            state_dict = checkpoint
+            
+        # Handle DataParallel prefix if present
         new_state_dict = {}
         for key, value in state_dict.items():
             if key.startswith('module.'):
@@ -1034,7 +1040,18 @@ def train_model_optimized(data_dict, input_dim, output_dim,
                 new_state_dict[new_key] = value
             else:
                 new_state_dict[key] = value
-        model.load_state_dict(new_state_dict)
+        
+        try:
+            model.load_state_dict(new_state_dict, strict=True)
+            logger.info("Successfully loaded best model state.")
+        except RuntimeError as e:
+            logger.warning(f"Failed to load best model with strict=True, attempting flexible loading: {e}")
+            try:
+                model.load_state_dict(new_state_dict, strict=False)
+                logger.info("Successfully loaded best model state with strict=False.")
+            except RuntimeError as e:
+                logger.error(f"Failed to load best model state: {e}")
+                raise
         
         # Final evaluation on test set for all models
         def evaluate_model(model, model_name):
