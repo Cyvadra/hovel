@@ -378,7 +378,7 @@ def load_loss_data(model_name):
     else:
         return None, None
 
-def test_model_sizes(hidden_sizes=[1536, 1024, 512, 128], num_layers=[16, 8, 4, 2], max_epochs=580, patience=50, test_split=0.05, val_split=0.05):
+def test_model_sizes(hidden_sizes=[1536, 1024, 512, 128], num_layers=[16, 8, 4, 2], min_epochs=100, max_epochs=580, patience=50, test_split=0.05, val_split=0.05):
     """
     Test different model sizes and save all results.
     
@@ -430,6 +430,7 @@ def test_model_sizes(hidden_sizes=[1536, 1024, 512, 128], num_layers=[16, 8, 4, 
                     hidden_size=hidden_size,
                     num_layers=num_layer,
                     batch_size=24,
+                    min_epochs=min_epochs,
                     max_epochs=max_epochs,
                     patience=patience  # No early stopping
                 )
@@ -748,6 +749,8 @@ if __name__ == "__main__":
                        help='List of number of layers to test')
     parser.add_argument('--plot-only', action='store_true',
                        help='Only regenerate plots, do not train new models')
+    parser.add_argument('--min-epochs', type=int, default=80,
+                       help='Minimum number of epochs to train')
     parser.add_argument('--max-epochs', type=int, default=580,
                        help='Maximum number of epochs to train')
     parser.add_argument('--test-split', type=float, default=0.05,
@@ -769,8 +772,8 @@ if __name__ == "__main__":
         
         if not args.plot_only:
             print("\nContinuing with normal training after plot regeneration...")
-            results = test_model_sizes(args.hidden_sizes, args.num_layers, args.max_epochs, args.patience, args.test_split, args.val_split)
+            results = test_model_sizes(args.hidden_sizes, args.num_layers, args.min_epochs, args.max_epochs, args.patience, args.test_split, args.val_split)
     else:
         # Normal training mode
         print("Starting normal model training...")
-        results = test_model_sizes(args.hidden_sizes, args.num_layers, args.max_epochs, args.patience, args.test_split, args.val_split)
+        results = test_model_sizes(args.hidden_sizes, args.num_layers, args.min_epochs, args.max_epochs, args.patience, args.test_split, args.val_split)

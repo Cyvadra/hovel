@@ -219,6 +219,7 @@ class OptimizedTrainingConfig:
         self.effective_batch_size = self.batch_size * self.gradient_accumulation_steps
         self.learning_rate = 1e-4  # Further reduced learning rate for stability
         self.weight_decay = 1e-4  # Increased L2 regularization
+        self.min_epochs = 100  # Minimum number of epochs to train
         self.max_epochs = 300  # Extended training time
         self.patience = 30  # Increased patience for noise adaptation
         self.gradient_clip_norm = 0.3  # Tighter gradient clipping
@@ -274,14 +275,20 @@ class OptimizedTrainingConfig:
     
     def validate(self):
         """Validate the configuration."""
-        config_dict = {key: value for key, value in self.__dict__.items() 
+        config_dict = {key: value for key, value in self.__dict__.items()
                       if not key.startswith('_')}
         validated_config = validate_training_config(config_dict)
-        
+
         # Update with validated values
         for key, value in validated_config.items():
             if hasattr(self, key):
                 setattr(self, key, value)
+
+        # Additional validation for min_epochs
+        if self.min_epochs >= self.max_epochs:
+            raise ConfigurationError(f"min_epochs ({self.min_epochs}) must be less than max_epochs ({self.max_epochs})")
+        if self.min_epochs < 1:
+            raise ConfigurationError(f"min_epochs ({self.min_epochs}) must be at least 1")
     
     def to_dict(self):
         """Convert configuration to dictionary."""
@@ -707,6 +714,7 @@ def train_model_optimized(data_dict, input_dim, output_dim,
     num_test_batches = data_dict['num_test_batches']
     
     logger.info(f"Starting optimized training for {config.max_epochs} epochs...")
+    logger.info(f"Minimum epochs before early stopping: {config.min_epochs}")
     logger.info(f"Batch size: {batch_size}, Train batches: {num_train_batches}, Val batches: {num_val_batches}")
     logger.info(f"Starting from epoch {start_epoch + 1}")
     
@@ -845,14 +853,26 @@ def train_model_optimized(data_dict, input_dim, output_dim,
             epoch_end_time = time.time()
             epoch_time = epoch_end_time - epoch_start_time
             
-            logger.info(f"Epoch [{epoch+1:3d}/{config.max_epochs}]: "
-                      f"Train Loss: {avg_train_loss:.6f}, "
-                      f"Val Loss: {avg_val_loss:.6f}, "
-                      f"LR: {current_lr:.2e}, "
-                      f"Time: {epoch_time:.2f}s, "
-                      f"ETA: {int(epoch_time * (config.max_epochs - epoch - 1) // 3600)}h "
-                      f"{int((epoch_time * (config.max_epochs - epoch - 1) % 3600) // 60)}m "
-                      f"{int((epoch_time * (config.max_epochs - epoch - 1) % 60))}s")
+            # Log when min_epochs is reached (early stopping becomes active)
+            if epoch + 1 == config.min_epochs:
+                logger.info(f"Epoch [{epoch+1:3d}/{config.max_epochs}]: "
+                          f"Train Loss: {avg_train_loss:.6f}, "
+                          f"Val Loss: {avg_val_loss:.6f}, "
+                          f"LR: {current_lr:.2e}, "
+                          f"Time: {epoch_time:.2f}s, "
+                          f"ETA: {int(epoch_time * (config.max_epochs - epoch - 1) // 3600)}h "
+                          f"{int((epoch_time * (config.max_epochs - epoch - 1) % 3600) // 60)}m "
+                          f"{int((epoch_time * (config.max_epochs - epoch - 1) % 60))}s")
+                logger.info(f"  -> Reached minimum epochs ({config.min_epochs}). Early stopping is now active.")
+            else:
+                logger.info(f"Epoch [{epoch+1:3d}/{config.max_epochs}]: "
+                          f"Train Loss: {avg_train_loss:.6f}, "
+                          f"Val Loss: {avg_val_loss:.6f}, "
+                          f"LR: {current_lr:.2e}, "
+                          f"Time: {epoch_time:.2f}s, "
+                          f"ETA: {int(epoch_time * (config.max_epochs - epoch - 1) // 3600)}h "
+                          f"{int((epoch_time * (config.max_epochs - epoch - 1) % 3600) // 60)}m "
+                          f"{int((epoch_time * (config.max_epochs - epoch - 1) % 60))}s")
             
             # Early stopping and model saving
             if avg_val_loss < best_val_loss:
@@ -862,8 +882,9 @@ def train_model_optimized(data_dict, input_dim, output_dim,
                 logger.info(f"  -> New best model saved! Val Loss: {best_val_loss:.6f}")
             else:
                 patience_counter += 1
-                if patience_counter >= config.patience:
-                    logger.info(f"  -> Early stopping triggered after {config.patience} epochs without improvement")
+                # Only apply early stopping after min_epochs have been reached
+                if epoch + 1 >= config.min_epochs and patience_counter >= config.patience:
+                    logger.info(f"  -> Early stopping triggered after {config.patience} epochs without improvement (min_epochs: {config.min_epochs} reached)")
                     break
             
             # Save checkpoint periodically
@@ -1070,6 +1091,9 @@ if __name__ == "__main__":
     print(f"  Number of layers: {config.num_layers}")
     print(f"  Dropout rate: {config.dropout_rate}")
     print(f"  Batch size: {config.batch_size}")
+    print(f"  Min epochs: {config.min_epochs}")
+    print(f"  Max epochs: {config.max_epochs}")
+    print(f"  Patience: {config.patience}")
     
     # Setup GPU
     device = setup_gpu()
