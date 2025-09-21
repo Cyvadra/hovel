@@ -251,7 +251,8 @@ class ModelManager:
                 
                 # Apply confidence thresholding
                 mask = confidences > confidence_threshold
-                filtered_predictions = predictions * mask.unsqueeze(1)  # Zero out low confidence predictions
+                # filtered_predictions = predictions * mask.unsqueeze(1)  # Zero out low confidence predictions
+                filtered_predictions = predictions
                 
                 # Convert to numpy
                 predictions_np = filtered_predictions.cpu().numpy()

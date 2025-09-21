@@ -222,20 +222,20 @@ class OptimizedTrainingConfig:
         # Model parameters - optimized defaults
         self.hidden_size = 1536
         self.num_layers = 12
-        self.noise_std = 0.09  # Initial noise standard deviation
-        self.noise_decay = 0.995  # Noise decay rate per epoch
-        self.min_noise_std = 0.001  # Minimum noise level
+        self.noise_std = 0.03  # 降低初始噪声标准差
+        self.noise_decay = 0.98  # 加快噪声衰减速度
+        self.min_noise_std = 0.0001  # 降低最小噪声水平
         
-        # Training parameters - enhanced stability defaults
-        self.batch_size = 64  # Reduced batch size for better generalization
-        self.gradient_accumulation_steps = 4  # Number of steps to accumulate gradients
+        # Training parameters - adjusted for better convergence
+        self.batch_size = 32  # 减小batch size以增加更新频率
+        self.gradient_accumulation_steps = 2  # 减少梯度累积步数
         self._effective_batch_size = None  # Will be calculated on demand
-        self.learning_rate = 5e-5  # Further reduced learning rate for stability
-        self.weight_decay = 1e-4  # Increased L2 regularization
-        self.min_epochs = 100  # Minimum number of epochs to train
-        self.max_epochs = 300  # Extended training time
-        self.patience = 30  # Increased patience for noise adaptation
-        self.gradient_clip_norm = 0.3  # Tighter gradient clipping
+        self.learning_rate = 1e-4  # 提高学习率以避免陷入局部最小值
+        self.weight_decay = 1e-5  # 降低L2正则化强度
+        self.min_epochs = 50  # 减少最小训练轮数
+        self.max_epochs = 200  # 适当减少最大训练轮数
+        self.patience = 20  # 减少早停耐心值
+        self.gradient_clip_norm = 1.0  # 放宽梯度裁剪范围
         self.mixup_alpha = 0.2  # Mixup interpolation factor
         
         # Data parameters
@@ -470,7 +470,7 @@ class OptimizedModel(nn.Module):
     """
     Optimized neural network with noise regularization and advanced techniques to prevent overfitting.
     """
-    def __init__(self, input_dim, output_dim, hidden_size=128, num_layers=8, noise_std=0.09):
+    def __init__(self, input_dim, output_dim, hidden_size=128, num_layers=8, noise_std=0.03):
         super().__init__()
         self.input_dim = input_dim
         self.output_dim = output_dim
@@ -482,27 +482,27 @@ class OptimizedModel(nn.Module):
         self.input_proj = nn.utils.spectral_norm(nn.Linear(input_dim, hidden_size))
         self.input_norm = nn.LayerNorm(hidden_size)
         
-        # Hidden layers with residual connections and layer normalization
+        # Hidden layers with residual connections and reduced normalization
         self.layers = nn.ModuleList()
         for i in range(num_layers):
             layer = nn.Sequential(
-                nn.utils.spectral_norm(nn.Linear(hidden_size, hidden_size)),
+                nn.Linear(hidden_size, hidden_size),  # 移除部分spectral normalization
                 nn.LayerNorm(hidden_size),
                 nn.GELU(),
-                nn.utils.spectral_norm(nn.Linear(hidden_size, hidden_size)),
+                nn.Linear(hidden_size, hidden_size),
                 nn.LayerNorm(hidden_size)
             )
             self.layers.append(layer)
         
-        # Separate prediction and confidence heads
-        self.pred_head = nn.utils.spectral_norm(nn.Linear(hidden_size, output_dim))
+        # Separate prediction and confidence heads with reduced constraints
+        self.pred_head = nn.Linear(hidden_size, output_dim)  # 移除spectral normalization
         
-        # Confidence head with additional non-linearity
+        # Confidence head with simplified architecture
         self.conf_head = nn.Sequential(
-            nn.utils.spectral_norm(nn.Linear(hidden_size, hidden_size // 2)),
+            nn.Linear(hidden_size, hidden_size // 2),
             nn.LayerNorm(hidden_size // 2),
             nn.GELU(),
-            nn.utils.spectral_norm(nn.Linear(hidden_size // 2, 1))
+            nn.Linear(hidden_size // 2, 1)
         )
         
         # Initialize weights with orthogonal initialization
@@ -547,8 +547,8 @@ class OptimizedModel(nn.Module):
                 noise = torch.randn_like(x) * (self.noise_std / 2)  # Reduced noise in deeper layers
                 x = x + noise
             
-            # Residual connection with scaling
-            x = 0.9 * x + 0.1 * residual  # Weighted residual connection
+            # 增加残差连接的权重，加强信息流动
+            x = 0.7 * x + 0.3 * residual  # 提高残差分支的权重
         
         # Apply minimal noise before heads
         if self.training:
@@ -729,9 +729,10 @@ def train_model_optimized(data_dict, input_dim, output_dim,
     
     # Loss function with confidence weighting
     criterion = ConfidenceWeightedLoss(
-        confidence_threshold=0.5,  # 初始置信度阈值
-        alpha=0.1,                 # 置信度正则化系数
-        beta=0.05                  # 阈值损失系数
+        confidence_threshold=0.3,  # 降低置信度阈值，使其更接近目标值
+        alpha=0.2,                 # 增加置信度正则化系数，加强对置信度的约束
+        beta=0.1,                  # 增加阈值损失系数，加强对预测值的约束
+        target_confidence=0.3      # 提高目标置信度，避免模型过度保守
     )
     
     
@@ -1496,38 +1497,38 @@ def parse_args():
     parser = argparse.ArgumentParser(description='Optimized PyTorch Training')
     
     # Model architecture
-    parser.add_argument('--hidden_size', type=int, default=128,
-                      help='Hidden size for the model (default: 128)')
-    parser.add_argument('--num_layers', type=int, default=8,
-                      help='Number of layers in the model (default: 8)')
+    parser.add_argument('--hidden_size', type=int, default=1536,
+                      help='Hidden size for the model (default: 1536)')
+    parser.add_argument('--num_layers', type=int, default=14,
+                      help='Number of layers in the model (default: 14)')
     
     # Training parameters
-    parser.add_argument('--batch_size', type=int, default=64,
-                      help='Batch size for training (default: 64)')
-    parser.add_argument('--min_epochs', type=int, default=100,
-                      help='Minimum number of epochs to train (default: 100)')
-    parser.add_argument('--max_epochs', type=int, default=300,
-                      help='Maximum number of epochs to train (default: 300)')
-    parser.add_argument('--patience', type=int, default=30,
-                      help='Patience for early stopping (default: 30)')
+    parser.add_argument('--batch_size', type=int, default=32,
+                      help='Batch size for training (default: 32)')
+    parser.add_argument('--min_epochs', type=int, default=300,
+                      help='Minimum number of epochs to train (default: 300)')
+    parser.add_argument('--max_epochs', type=int, default=500,
+                      help='Maximum number of epochs to train (default: 500)')
+    parser.add_argument('--patience', type=int, default=40,
+                      help='Patience for early stopping (default: 40)')
     
     # Learning rate parameters
-    parser.add_argument('--learning_rate', type=float, default=5e-5,
-                      help='Initial learning rate (default: 5e-5)')
-    parser.add_argument('--weight_decay', type=float, default=1e-4,
-                      help='Weight decay for optimizer (default: 1e-4)')
+    parser.add_argument('--learning_rate', type=float, default=1e-4,
+                      help='Initial learning rate (default: 1e-4)')
+    parser.add_argument('--weight_decay', type=float, default=1e-5,
+                      help='Weight decay for optimizer (default: 1e-5)')
     
     # Data split parameters
-    parser.add_argument('--val_split', type=float, default=0.1,
-                      help='Validation split ratio (default: 0.1)')
-    parser.add_argument('--test_split', type=float, default=0.1,
-                      help='Test split ratio (default: 0.1)')
+    parser.add_argument('--val_split', type=float, default=0.15,
+                      help='Validation split ratio (default: 0.15)')
+    parser.add_argument('--test_split', type=float, default=0.05,
+                      help='Test split ratio (default: 0.05)')
     
     # Noise parameters
-    parser.add_argument('--noise_std', type=float, default=0.09,
-                      help='Initial noise standard deviation (default: 0.09)')
-    parser.add_argument('--noise_decay', type=float, default=0.995,
-                      help='Noise decay rate per epoch (default: 0.995)')
+    parser.add_argument('--noise_std', type=float, default=0.03,
+                      help='Initial noise standard deviation (default: 0.03)')
+    parser.add_argument('--noise_decay', type=float, default=0.98,
+                      help='Noise decay rate per epoch (default: 0.98)')
     
     # Model name
     parser.add_argument('--model_name', type=str, default="optimized_model",

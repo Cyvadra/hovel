@@ -283,7 +283,7 @@ def main():
     
     # Create output directory for this test run
     timestamp = time.strftime("%Y%m%d_%H%M%S")
-    output_dir = os.path.join("test_results", f"run_{timestamp}")
+    output_dir = os.path.join("api_test_results")
     os.makedirs(output_dir, exist_ok=True)
     
     # Plot predictions with timestamps
