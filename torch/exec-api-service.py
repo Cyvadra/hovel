@@ -88,8 +88,8 @@ class ModelManager:
             tuple: (hidden_size, num_layers)
         """
         # Default values
-        default_hidden_size = 512
-        default_num_layers = 4
+        default_hidden_size = 128
+        default_num_layers = 8
         
         # Extract filename without path
         basename = os.path.basename(filename)
@@ -140,6 +140,17 @@ class ModelManager:
                 if 'model_state_dict' in checkpoint:
                     logger.info("Loading from full training checkpoint")
                     state_dict = checkpoint['model_state_dict']
+                    
+                    # Try to get model parameters from checkpoint
+                    if 'model_params' in checkpoint:
+                        model_params = checkpoint['model_params']
+                        self.input_dim = model_params.get('input_dim', self.input_dim)
+                        self.output_dim = model_params.get('output_dim', self.output_dim)
+                        self.hidden_size = model_params.get('hidden_size', self.hidden_size)
+                        self.num_layers = model_params.get('num_layers', self.num_layers)
+                        logger.info(f"Loaded model parameters from checkpoint: input_dim={self.input_dim}, "
+                                  f"output_dim={self.output_dim}, hidden_size={self.hidden_size}, "
+                                  f"num_layers={self.num_layers}")
                 else:
                     # Assume it's a direct state dict
                     state_dict = checkpoint
@@ -173,6 +184,11 @@ class ModelManager:
                 # Default values if we can't infer
                 self.output_dim = 5
                 logger.warning("Could not infer output_dim from model, using default: 5")
+            
+            # Validate model parameters
+            if not all([self.input_dim, self.output_dim, self.hidden_size, self.num_layers]):
+                raise ValueError("Missing required model parameters. Model parameters must be provided either "
+                               "in the checkpoint or through filename pattern.")
             
             # Create the model with parsed parameters
             self.model = OptimizedModel(

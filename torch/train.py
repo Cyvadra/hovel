@@ -122,6 +122,12 @@ def save_checkpoint(model, optimizer, scheduler, epoch, best_val_loss,
         val_losses (list): List of validation losses
         model_name (str): Base name for the checkpoint file
     """
+    # Get model parameters
+    if isinstance(model, nn.DataParallel):
+        model_instance = model.module
+    else:
+        model_instance = model
+
     checkpoint = {
         'model_state_dict': model.state_dict(),
         'optimizer_state_dict': optimizer.state_dict(),
@@ -130,8 +136,14 @@ def save_checkpoint(model, optimizer, scheduler, epoch, best_val_loss,
         'best_val_loss': best_val_loss,
         'patience_counter': patience_counter,
         'train_losses': train_losses,
-        'val_losses': val_losses
-    }
+        'val_losses': val_losses,
+        # Add model parameters
+        'model_params': {
+            'input_dim': model_instance.input_dim,
+            'output_dim': model_instance.output_dim,
+            'hidden_size': model_instance.hidden_size,
+            'num_layers': len(model_instance.layers)
+        }
     
     checkpoint_path = f'{model_name}_checkpoint_epoch_{epoch}.pth'
     torch.save(checkpoint, checkpoint_path)
@@ -457,7 +469,7 @@ class OptimizedModel(nn.Module):
     """
     Optimized neural network with noise regularization and advanced techniques to prevent overfitting.
     """
-    def __init__(self, input_dim, output_dim, hidden_size=1024, num_layers=12, noise_std=0.09):
+    def __init__(self, input_dim, output_dim, hidden_size=128, num_layers=8, noise_std=0.09):
         super().__init__()
         self.input_dim = input_dim
         self.output_dim = output_dim
@@ -554,12 +566,18 @@ class ConfidenceWeightedLoss(nn.Module):
     """
     带有置信度加权的损失函数。
     模型输出的最后一个维度作为置信度分数，用于对整体预测进行加权。
+    
+    特点：
+    1. 置信度不足时权重范围在[0.1,1]之间
+    2. 引导置信度向目标值(0.2)靠近
+    3. 平滑的权重过渡
     """
-    def __init__(self, confidence_threshold=0.5, alpha=0.1, beta=0.05):
+    def __init__(self, confidence_threshold=0.5, alpha=0.1, beta=0.05, target_confidence=0.2):
         super().__init__()
         self.confidence_threshold = confidence_threshold  # 置信度阈值
         self.alpha = alpha  # 置信度正则化系数
         self.beta = beta   # 阈值损失系数
+        self.target_confidence = target_confidence  # 目标置信度值(0.2)
         self.base_criterion = nn.L1Loss(reduction='none')  # 基础损失函数
         
     def forward(self, outputs, targets):
@@ -570,21 +588,26 @@ class ConfidenceWeightedLoss(nn.Module):
         # 计算基础预测误差 (batch_size,)
         base_errors = self.base_criterion(predictions, targets).mean(dim=1)
         
-        # 1. 加权预测损失：置信度越高的预测，其误差应该越小
-        prediction_loss = (confidence * base_errors).mean()
+        # 1. 动态权重计算：置信度不足时在[0.1,1]范围内
+        # 使用sigmoid将置信度映射到[0.1,1]范围
+        dynamic_weight = 0.1 + 0.9 * torch.sigmoid((confidence - self.confidence_threshold) * 5)
+        prediction_loss = (dynamic_weight * base_errors).mean()
         
-        # 2. 置信度正则化：防止模型总是输出极端置信度
-        confidence_reg = -self.alpha * (
+        # 2. 置信度惩罚：引导置信度向目标值靠近
+        confidence_penalty = self.alpha * (confidence - self.target_confidence).abs().mean()
+        
+        # 3. 置信度分布正则化：防止模型输出极端置信度
+        confidence_reg = -self.beta * (
             torch.log(confidence + 1e-7) + torch.log(1 - confidence + 1e-7)
         ).mean()
         
-        # 3. 阈值损失：使用平滑过渡而不是硬阈值
-        # 使用sigmoid函数创建平滑权重，让低于阈值的样本也有小的贡献
-        smooth_weight = torch.sigmoid((confidence - self.confidence_threshold) * 10)  # *10控制过渡的陡峭程度
+        # 4. 阈值损失：平滑过渡
+        threshold_dist = torch.abs(confidence - self.target_confidence)
+        smooth_weight = torch.exp(-5 * threshold_dist)  # 使用指数衰减创建平滑权重
         threshold_loss = self.beta * (smooth_weight * base_errors).mean()
         
         # 总损失
-        total_loss = prediction_loss + confidence_reg + threshold_loss
+        total_loss = prediction_loss + confidence_penalty + confidence_reg + threshold_loss
         
         return total_loss
 
@@ -617,7 +640,7 @@ def mixup_data(x, y, alpha=0.2, device=None):
 
 # --- Optimized Training Function ---
 def train_model_optimized(data_dict, input_dim, output_dim, 
-                         hidden_size=1024, num_layers=12, 
+                         hidden_size=128, num_layers=8, 
                          model_name="optimized_model", config=None):
     """
     Optimized training function using single large tensors on GPU for maximum speed.
@@ -936,7 +959,21 @@ def train_model_optimized(data_dict, input_dim, output_dim,
             if avg_val_loss < best_val_loss:
                 best_val_loss = avg_val_loss
                 patience_counter = 0
-                torch.save(model.state_dict(), best_model_path)
+                # Save best model with parameters
+                if isinstance(model, nn.DataParallel):
+                    model_instance = model.module
+                else:
+                    model_instance = model
+                    
+                torch.save({
+                    'model_state_dict': model.state_dict(),
+                    'model_params': {
+                        'input_dim': model_instance.input_dim,
+                        'output_dim': model_instance.output_dim,
+                        'hidden_size': model_instance.hidden_size,
+                        'num_layers': len(model_instance.layers)
+                    }
+                }, best_model_path)
                 logger.info(f"  -> New best model saved! Val Loss: {best_val_loss:.6f}")
             else:
                 patience_counter += 1
@@ -1466,8 +1503,8 @@ if __name__ == "__main__":
     # Create configuration with validation
     config = OptimizedTrainingConfig()
     config.update(
-        hidden_size=1024,
-        num_layers=12,
+        hidden_size=128,
+        num_layers=8,
         batch_size=64  # Conservative batch size
     )
     
