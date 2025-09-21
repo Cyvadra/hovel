@@ -7,6 +7,8 @@ import h5py
 import os
 import re
 from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
+from torch.optim.swa_utils import AveragedModel, SWALR
+from torch.optim.lr_scheduler import CyclicLR
 from torch.nn import functional as F
 import warnings
 import logging
@@ -233,6 +235,13 @@ class OptimizedTrainingConfig:
         self.scheduler_t0 = 10  # Reduced for faster warmup
         self.scheduler_t_mult = 2
         self.scheduler_eta_min = 1e-6
+        
+        # SWA parameters
+        self.swa_start = 50  # Start SWA after this many epochs
+        self.swa_lr = 1e-4  # SWA learning rate
+        self.swa_freq = 5  # Frequency of model averaging
+        self.swa_anneal_epochs = 10  # Number of epochs to anneal for SWA
+        self.swa_anneal_strategy = 'cos'  # Annealing strategy ('cos' or 'linear')
         
         # Model saving
         self.save_checkpoint_every = 20
@@ -563,6 +572,9 @@ def train_model_optimized(data_dict, input_dim, output_dim,
         model = nn.DataParallel(model)
     model.to(device)
     
+    # Create SWA model
+    swa_model = AveragedModel(model)
+    
     # Track noise level
     current_noise_std = config.noise_std
     
@@ -584,10 +596,15 @@ def train_model_optimized(data_dict, input_dim, output_dim,
         eta_min=config.scheduler_eta_min
     )
     
+    # SWA scheduler
+    swa_scheduler = SWALR(
+        optimizer,
+        swa_lr=config.swa_lr,
+        anneal_epochs=config.swa_anneal_epochs,
+        anneal_strategy=config.swa_anneal_strategy
+    )
+    
     # Loss function
-    # criterion = nn.HuberLoss(
-    #     delta=config.huber_delta
-    # )
     criterion = nn.L1Loss()
     
     
@@ -718,9 +735,17 @@ def train_model_optimized(data_dict, input_dim, output_dim,
             train_losses.append(avg_train_loss)
             val_losses.append(avg_val_loss)
             
-            # Learning rate scheduling
-            scheduler.step()
-            current_lr = optimizer.param_groups[0]['lr']
+            # Learning rate and SWA scheduling
+            if epoch < config.swa_start:
+                scheduler.step()
+                current_lr = optimizer.param_groups[0]['lr']
+            else:
+                swa_scheduler.step()
+                current_lr = config.swa_lr
+                
+                # Update SWA model
+                if (epoch + 1) % config.swa_freq == 0:
+                    swa_model.update_parameters(model)
             
             # Update noise level with decay
             current_noise_std = max(
@@ -776,8 +801,23 @@ def train_model_optimized(data_dict, input_dim, output_dim,
                 logger.info(f"  -> Checkpoint saved for epoch {epoch + 1}")
                 plot_losses(train_losses, val_losses, data_dict['train_last_ts'], data_dict['val_last_ts'], data_dict['test_last_ts'], model_name)
         
-        # Load the best model for final evaluation
-        logger.info("Loading the best model state for final evaluation.")
+        # Update batch normalization statistics for SWA model
+        logger.info("Updating batch normalization statistics for SWA model...")
+        swa_model.eval()
+        torch.optim.swa_utils.update_bn(
+            loader=[(X_train[i:i + batch_size], Y_train[i:i + batch_size]) 
+                   for i in range(0, len(X_train), batch_size)],
+            model=swa_model,
+            device=device
+        )
+        
+        # Save SWA model
+        swa_model_path = f'{model_name}_swa_model.pth'
+        torch.save(swa_model.state_dict(), swa_model_path)
+        logger.info(f"SWA model saved to {swa_model_path}")
+        
+        # Load the best model for comparison
+        logger.info("Loading the best model state for comparison.")
         state_dict = torch.load(best_model_path, map_location=device)
         new_state_dict = {}
         for key, value in state_dict.items():
