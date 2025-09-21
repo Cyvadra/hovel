@@ -665,15 +665,8 @@ def train_model_optimized(data_dict, input_dim, output_dim,
                     inputs = X_val[start_idx:end_idx]
                     targets = Y_val[start_idx:end_idx]
                     
-                    if config.use_mixed_precision and scaler is not None:
-                        with autocast():
-                            outputs = model(inputs)
-                            # Convert targets to float32 for loss computation stability
-                            loss = criterion(outputs, targets.float())
-                    else:
-                        outputs = model(inputs)
-                        # Convert targets to float32 for loss computation stability
-                        loss = criterion(outputs, targets.float())
+                    outputs = model(inputs)
+                    loss = criterion(outputs, targets)
                     
                     epoch_val_loss += loss.item()
             
