@@ -1489,9 +1489,57 @@ def distill_model_optimized(
         raise e
 
 # --- Main Execution ---
+def parse_args():
+    """Parse command line arguments."""
+    import argparse
+    parser = argparse.ArgumentParser(description='Optimized PyTorch Training')
+    
+    # Model architecture
+    parser.add_argument('--hidden_size', type=int, default=128,
+                      help='Hidden size for the model (default: 128)')
+    parser.add_argument('--num_layers', type=int, default=8,
+                      help='Number of layers in the model (default: 8)')
+    
+    # Training parameters
+    parser.add_argument('--batch_size', type=int, default=64,
+                      help='Batch size for training (default: 64)')
+    parser.add_argument('--min_epochs', type=int, default=100,
+                      help='Minimum number of epochs to train (default: 100)')
+    parser.add_argument('--max_epochs', type=int, default=300,
+                      help='Maximum number of epochs to train (default: 300)')
+    parser.add_argument('--patience', type=int, default=30,
+                      help='Patience for early stopping (default: 30)')
+    
+    # Learning rate parameters
+    parser.add_argument('--learning_rate', type=float, default=5e-5,
+                      help='Initial learning rate (default: 5e-5)')
+    parser.add_argument('--weight_decay', type=float, default=1e-4,
+                      help='Weight decay for optimizer (default: 1e-4)')
+    
+    # Data split parameters
+    parser.add_argument('--val_split', type=float, default=0.1,
+                      help='Validation split ratio (default: 0.1)')
+    parser.add_argument('--test_split', type=float, default=0.1,
+                      help='Test split ratio (default: 0.1)')
+    
+    # Noise parameters
+    parser.add_argument('--noise_std', type=float, default=0.09,
+                      help='Initial noise standard deviation (default: 0.09)')
+    parser.add_argument('--noise_decay', type=float, default=0.995,
+                      help='Noise decay rate per epoch (default: 0.995)')
+    
+    # Model name
+    parser.add_argument('--model_name', type=str, default="optimized_model",
+                      help='Base name for saved model files (default: optimized_model)')
+    
+    return parser.parse_args()
+
 if __name__ == "__main__":
     print("Starting Optimized PyTorch Training")
     print("=" * 60)
+    
+    # Parse command line arguments
+    args = parse_args()
     
     # Load and prepare data
     X, Y, T = load_and_preprocess_data()
@@ -1503,9 +1551,18 @@ if __name__ == "__main__":
     # Create configuration with validation
     config = OptimizedTrainingConfig()
     config.update(
-        hidden_size=128,
-        num_layers=8,
-        batch_size=64  # Conservative batch size
+        hidden_size=args.hidden_size,
+        num_layers=args.num_layers,
+        batch_size=args.batch_size,
+        min_epochs=args.min_epochs,
+        max_epochs=args.max_epochs,
+        patience=args.patience,
+        learning_rate=args.learning_rate,
+        weight_decay=args.weight_decay,
+        val_split=args.val_split,
+        test_split=args.test_split,
+        noise_std=args.noise_std,
+        noise_decay=args.noise_decay
     )
     
     # Validate configuration
@@ -1526,6 +1583,10 @@ if __name__ == "__main__":
     print(f"  Min epochs: {config.min_epochs}")
     print(f"  Max epochs: {config.max_epochs}")
     print(f"  Patience: {config.patience}")
+    print(f"  Learning rate: {config.learning_rate}")
+    print(f"  Weight decay: {config.weight_decay}")
+    print(f"  Noise std: {config.noise_std}")
+    print(f"  Noise decay: {config.noise_decay}")
     
     # Setup GPU
     device = setup_gpu()
@@ -1543,22 +1604,22 @@ if __name__ == "__main__":
     # Train the model
     model, train_losses, val_losses, test_loss = train_model_optimized(
         data_dict, input_dim, output_dim,
-        model_name="optimized_model",
+        model_name=args.model_name,
         config=config
     )
     
     # Save configuration
-    save_training_config(config, "optimized_model")
+    save_training_config(config, args.model_name)
     
     # Plot results
-    plot_losses(train_losses, val_losses, data_dict['train_last_ts'], data_dict['val_last_ts'], data_dict['test_last_ts'])
+    plot_losses(train_losses, val_losses, data_dict['train_last_ts'], data_dict['val_last_ts'], data_dict['test_last_ts'], model_name=args.model_name)
 
     print("\nOptimized training complete!")
     print("Files saved:")
-    print("  - optimized_model_best_model.pth (best model)")
-    print("  - optimized_model_config.json (configuration)")
-    print("  - optimized_model_training.log (training log)")
-    print("  - optimized_model_loss_analysis.png (loss curves)")
+    print(f"  - {args.model_name}_best_model.pth (best model)")
+    print(f"  - {args.model_name}_config.json (configuration)")
+    print(f"  - {args.model_name}_training.log (training log)")
+    print(f"  - {args.model_name}_loss_analysis.png (loss curves)")
     if test_loss is not None:
         print(f"  - Final test loss: {test_loss:.6f}")
     
