@@ -202,15 +202,18 @@ class ModelManager:
             self.is_loaded = False
             return False
     
-    def predict(self, input_data: np.ndarray) -> np.ndarray:
+    def predict(self, input_data: np.ndarray, confidence_threshold: float = 0.5) -> tuple:
         """
-        Make predictions using the loaded model.
+        Make predictions using the loaded model with confidence thresholding.
         
         Args:
             input_data: Input data of shape (batch_size, input_dim)
+            confidence_threshold: Threshold for confidence scores (default: 0.5)
             
         Returns:
-            Predictions of shape (batch_size, output_dim)
+            tuple: (predictions, confidences)
+            - predictions: Array of shape (batch_size, output_dim)
+            - confidences: Array of shape (batch_size,)
         """
         if not self.is_loaded:
             raise RuntimeError("Model is not loaded")
@@ -226,10 +229,19 @@ class ModelManager:
             with torch.no_grad():
                 model_output = self.model(input_tensor)
                 
-                # Convert back to numpy
-                predictions_np = model_output.cpu().numpy()
+                # Split predictions and confidence
+                predictions = model_output[:, :-1]  # All but last column
+                confidences = torch.sigmoid(model_output[:, -1])  # Last column, apply sigmoid
                 
-                return predictions_np
+                # Apply confidence thresholding
+                mask = confidences > confidence_threshold
+                filtered_predictions = predictions * mask.unsqueeze(1)  # Zero out low confidence predictions
+                
+                # Convert to numpy
+                predictions_np = filtered_predictions.cpu().numpy()
+                confidences_np = confidences.cpu().numpy()
+                
+                return predictions_np, confidences_np
                 
         except Exception as e:
             logger.error(f"Prediction failed: {e}")
@@ -256,6 +268,7 @@ class ModelManager:
 class PredictionRequest(BaseModel):
     """Request model for predictions."""
     data: List[List[float]] = Field(..., description="Input data as a list of lists")
+    confidence_threshold: float = Field(default=0.5, ge=0.0, le=1.0, description="Confidence threshold for predictions (0.0 to 1.0)")
     
     @validator('data')
     def validate_data(cls, v):
@@ -271,6 +284,7 @@ class PredictionRequest(BaseModel):
 class PredictionResponse(BaseModel):
     """Response model for predictions."""
     predictions: List[List[float]] = Field(..., description="Model predictions")
+    confidences: List[float] = Field(..., description="Confidence scores for each prediction")
     input_shape: List[int] = Field(..., description="Shape of input data")
     output_shape: List[int] = Field(..., description="Shape of output data")
     processing_time: float = Field(..., description="Processing time in seconds")
@@ -301,7 +315,18 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="Optimized PyTorch Model API",
-    description="API service for the optimized PyTorch model",
+    description="""
+    API service for the optimized PyTorch model with confidence thresholding.
+    
+    The model returns both predictions and confidence scores for each prediction.
+    Predictions with confidence scores below the specified threshold are zeroed out.
+    This helps ensure that only high-confidence predictions are returned.
+    
+    Key Features:
+    - Confidence scores for each prediction
+    - Adjustable confidence threshold (0.0 to 1.0)
+    - Zero-out predictions below confidence threshold
+    """,
     version="1.0.0",
     lifespan=lifespan
 )
@@ -348,7 +373,13 @@ async def health_check():
 
 @app.post("/predict", response_model=PredictionResponse)
 async def predict(request: PredictionRequest):
-    """Make predictions using the loaded model."""
+    """
+    Make predictions using the loaded model.
+    
+    The model returns predictions along with confidence scores. Predictions with confidence
+    below the threshold are zeroed out. The confidence threshold can be adjusted via the
+    request parameter (default: 0.5).
+    """
     global model_manager
     
     if model_manager is None or not model_manager.is_loaded:
@@ -361,13 +392,17 @@ async def predict(request: PredictionRequest):
         # Record processing time
         start_time = time.time()
         
-        # Make prediction
-        predictions = model_manager.predict(input_data)
+        # Make prediction with confidence threshold
+        predictions, confidences = model_manager.predict(
+            input_data, 
+            confidence_threshold=request.confidence_threshold
+        )
         
         processing_time = time.time() - start_time
         
         return PredictionResponse(
             predictions=predictions.tolist(),
+            confidences=confidences.tolist(),
             input_shape=list(input_data.shape),
             output_shape=list(predictions.shape),
             processing_time=processing_time
