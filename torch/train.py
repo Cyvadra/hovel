@@ -214,11 +214,14 @@ class OptimizedTrainingConfig:
         
         # Training parameters - enhanced stability defaults
         self.batch_size = 32  # Reduced batch size for better generalization
+        self.gradient_accumulation_steps = 4  # Number of steps to accumulate gradients
+        self.effective_batch_size = self.batch_size * self.gradient_accumulation_steps
         self.learning_rate = 1e-4  # Further reduced learning rate for stability
         self.weight_decay = 1e-4  # Increased L2 regularization
         self.max_epochs = 300  # Extended training time
         self.patience = 30  # Increased patience for noise adaptation
         self.gradient_clip_norm = 0.3  # Tighter gradient clipping
+        self.mixup_alpha = 0.2  # Mixup interpolation factor
         
         # Data parameters
         self.val_split = 0.1  # Increased for better validation
@@ -496,6 +499,33 @@ class OptimizedModel(nn.Module):
 # --- Optimized Loss Functions ---
 # Using PyTorch's built-in L1Loss (Mean Absolute Error)
 
+# --- Data Augmentation ---
+def mixup_data(x, y, alpha=0.2, device=None):
+    """
+    Performs Mixup on the input data and labels.
+    
+    Args:
+        x (torch.Tensor): Input data
+        y (torch.Tensor): Target data
+        alpha (float): Mixup interpolation coefficient
+        device (torch.device): Device to use
+        
+    Returns:
+        tuple: (mixed_x, mixed_y, lambda)
+    """
+    if alpha > 0:
+        lam = np.random.beta(alpha, alpha)
+    else:
+        lam = 1
+
+    batch_size = x.size()[0]
+    index = torch.randperm(batch_size).to(device)
+
+    mixed_x = lam * x + (1 - lam) * x[index]
+    mixed_y = lam * y + (1 - lam) * y[index]
+
+    return mixed_x, mixed_y, lam
+
 # --- Optimized Training Function ---
 def train_model_optimized(data_dict, input_dim, output_dim, 
                          hidden_size=512, num_layers=4, dropout_rate=0.1, 
@@ -636,21 +666,32 @@ def train_model_optimized(data_dict, input_dim, output_dim,
             # Training phase
             model.train()
             epoch_train_loss = 0
+            optimizer.zero_grad()  # Zero gradients at the start of epoch
             
             for i in range(num_train_batches):
-                optimizer.zero_grad()
-                
                 # Slice the data from the single large tensor - this is extremely fast
                 start_idx = i * batch_size
                 end_idx = start_idx + batch_size
                 inputs = X_train[start_idx:end_idx]
                 targets = Y_train[start_idx:end_idx]
                 
+                # Apply Mixup augmentation during training
+                if config.mixup_alpha > 0:
+                    inputs, targets, _ = mixup_data(inputs, targets, config.mixup_alpha, device)
+                
+                # Forward pass
                 outputs = model(inputs)
                 loss = criterion(outputs, targets)
+                
+                # Scale loss for gradient accumulation
+                loss = loss / config.gradient_accumulation_steps
                 loss.backward()
-                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=config.gradient_clip_norm)
-                optimizer.step()
+                
+                # Step optimization after accumulating gradients
+                if (i + 1) % config.gradient_accumulation_steps == 0:
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=config.gradient_clip_norm)
+                    optimizer.step()
+                    optimizer.zero_grad()
                 
                 epoch_train_loss += loss.item()
             
