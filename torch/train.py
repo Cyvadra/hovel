@@ -120,7 +120,6 @@ def save_checkpoint(model, optimizer, scheduler, epoch, best_val_loss,
         patience_counter (int): Current patience counter
         train_losses (list): List of training losses
         val_losses (list): List of validation losses
-        scaler: GradScaler for mixed precision
         model_name (str): Base name for the checkpoint file
     """
     checkpoint = {
@@ -665,10 +664,6 @@ def train_model_optimized(data_dict, input_dim, output_dim,
             train_losses = training_state['train_losses']
             val_losses = training_state['val_losses']
             
-            # Load scaler state if available
-            if training_state['scaler_state_dict'] and scaler is not None:
-                scaler.load_state_dict(training_state['scaler_state_dict'])
-            
             logger.info(f"Resuming training from epoch {start_epoch + 1}")
             logger.info(f"Previous best validation loss: {best_val_loss:.6f}")
             
@@ -875,7 +870,7 @@ def train_model_optimized(data_dict, input_dim, output_dim,
             if (epoch + 1) % config.save_checkpoint_every == 0:
                 save_checkpoint(
                     model, optimizer, scheduler, epoch + 1, best_val_loss,
-                    patience_counter, train_losses, val_losses, scaler, model_name
+                    patience_counter, train_losses, val_losses, model_name
                 )
                 logger.info(f"  -> Checkpoint saved for epoch {epoch + 1}")
                 plot_losses(train_losses, val_losses, data_dict['train_last_ts'], data_dict['val_last_ts'], data_dict['test_last_ts'], model_name)
