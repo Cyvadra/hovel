@@ -107,7 +107,7 @@ def load_checkpoint(checkpoint_path, model, optimizer, scheduler, device):
 
 def save_checkpoint(model, optimizer, scheduler, epoch, best_val_loss, 
                    patience_counter, train_losses, val_losses,
-                   model_name="optimized_model"):
+                   model_name="optimized_model", save_after_epoch=0):
     """
     Save a complete checkpoint with model and training state.
     
@@ -121,7 +121,12 @@ def save_checkpoint(model, optimizer, scheduler, epoch, best_val_loss,
         train_losses (list): List of training losses
         val_losses (list): List of validation losses
         model_name (str): Base name for the checkpoint file
+        save_after_epoch (int): Only save checkpoint after this epoch number
     """
+    # Skip saving if we haven't reached save_after_epoch yet
+    if epoch <= save_after_epoch:
+        print(f"Skipping checkpoint save at epoch {epoch} (will start saving after epoch {save_after_epoch})")
+        return
     # Get model parameters
     if isinstance(model, nn.DataParallel):
         model_instance = model.module
@@ -277,6 +282,7 @@ class OptimizedTrainingConfig:
         
         # Model saving
         self.save_checkpoint_every = 20
+        self.save_after_epoch = 0  # 在多少个epoch之后开始保存模型权重，0表示从开始就保存
     
     def update(self, **kwargs):
         """Update configuration with new parameters."""
@@ -482,27 +488,27 @@ class OptimizedModel(nn.Module):
         self.input_proj = nn.utils.spectral_norm(nn.Linear(input_dim, hidden_size))
         self.input_norm = nn.LayerNorm(hidden_size)
         
-        # Hidden layers with residual connections and reduced normalization
+        # Hidden layers with residual connections and layer normalization
         self.layers = nn.ModuleList()
         for i in range(num_layers):
             layer = nn.Sequential(
-                nn.Linear(hidden_size, hidden_size),  # 移除部分spectral normalization
+                nn.utils.spectral_norm(nn.Linear(hidden_size, hidden_size)),
                 nn.LayerNorm(hidden_size),
                 nn.GELU(),
-                nn.Linear(hidden_size, hidden_size),
+                nn.utils.spectral_norm(nn.Linear(hidden_size, hidden_size)),
                 nn.LayerNorm(hidden_size)
             )
             self.layers.append(layer)
         
-        # Separate prediction and confidence heads with reduced constraints
-        self.pred_head = nn.Linear(hidden_size, output_dim)  # 移除spectral normalization
+        # Separate prediction and confidence heads
+        self.pred_head = nn.utils.spectral_norm(nn.Linear(hidden_size, output_dim))
         
-        # Confidence head with simplified architecture
+        # Confidence head with additional non-linearity
         self.conf_head = nn.Sequential(
-            nn.Linear(hidden_size, hidden_size // 2),
+            nn.utils.spectral_norm(nn.Linear(hidden_size, hidden_size // 2)),
             nn.LayerNorm(hidden_size // 2),
             nn.GELU(),
-            nn.Linear(hidden_size // 2, 1)
+            nn.utils.spectral_norm(nn.Linear(hidden_size // 2, 1))
         )
         
         # Initialize weights with orthogonal initialization
@@ -729,10 +735,10 @@ def train_model_optimized(data_dict, input_dim, output_dim,
     
     # Loss function with confidence weighting
     criterion = ConfidenceWeightedLoss(
-        confidence_threshold=0.3,  # 降低置信度阈值，使其更接近目标值
+        confidence_threshold=0.6,  # 降低置信度阈值，使其更接近目标值
         alpha=0.2,                 # 增加置信度正则化系数，加强对置信度的约束
         beta=0.1,                  # 增加阈值损失系数，加强对预测值的约束
-        target_confidence=0.3      # 提高目标置信度，避免模型过度保守
+        target_confidence=0.6      # 提高目标置信度，避免模型过度保守
     )
     
     
@@ -984,13 +990,15 @@ def train_model_optimized(data_dict, input_dim, output_dim,
                     logger.info(f"  -> Early stopping triggered after {config.patience} epochs without improvement (min_epochs: {config.min_epochs} reached)")
                     break
             
-            # Save checkpoint periodically
+            # Save checkpoint periodically after save_after_epoch
             if (epoch + 1) % config.save_checkpoint_every == 0:
                 save_checkpoint(
                     model, optimizer, scheduler, epoch + 1, best_val_loss,
-                    patience_counter, train_losses, val_losses, model_name
+                    patience_counter, train_losses, val_losses, model_name,
+                    save_after_epoch=config.save_after_epoch
                 )
-                logger.info(f"  -> Checkpoint saved for epoch {epoch + 1}")
+                if epoch + 1 > config.save_after_epoch:
+                    logger.info(f"  -> Checkpoint saved for epoch {epoch + 1}")
                 plot_losses(train_losses, val_losses, data_dict['train_last_ts'], data_dict['val_last_ts'], data_dict['test_last_ts'], model_name)
         
         # Update batch normalization statistics for SWA model
@@ -1530,6 +1538,10 @@ def parse_args():
     parser.add_argument('--noise_decay', type=float, default=0.98,
                       help='Noise decay rate per epoch (default: 0.98)')
     
+    # Model saving parameters
+    parser.add_argument('--save_after_epoch', type=int, default=0,
+                      help='Start saving model weights after this epoch (default: 0, save from start)')
+    
     # Model name
     parser.add_argument('--model_name', type=str, default="optimized_model",
                       help='Base name for saved model files (default: optimized_model)')
@@ -1564,7 +1576,8 @@ if __name__ == "__main__":
         val_split=args.val_split,
         test_split=args.test_split,
         noise_std=args.noise_std,
-        noise_decay=args.noise_decay
+        noise_decay=args.noise_decay,
+        save_after_epoch=args.save_after_epoch
     )
     
     # Validate configuration
