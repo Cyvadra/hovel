@@ -20,9 +20,9 @@ class ConfigValidator:
     PARAM_CONSTRAINTS = {
         # Model parameters
         'num_layers': {'type': int, 'min': 1, 'max': 32},
-        'hidden_size': {'type': int, 'min': 32, 'max': 4096},
-        'noise_std': {'type': float, 'min': 0.0, 'max': 1.0},
-        'noise_decay': {'type': float, 'min': 0.9, 'max': 1.0},
+        'hidden_size': {'type': int, 'min': 8, 'max': 4096},
+        'noise_std': {'type': float, 'min': 0.01, 'max': 1.0},
+        'noise_decay': {'type': float, 'min': 0.9, 'max': 0.999},
         'min_noise_std': {'type': float, 'min': 0.0, 'max': 0.1},
         
         # Training parameters
