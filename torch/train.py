@@ -207,17 +207,17 @@ class OptimizedTrainingConfig:
     
     def __init__(self):
         # Model parameters - optimized defaults
-        self.hidden_size = 512
-        self.num_layers = 4
-        self.noise_std = 0.01  # Initial noise standard deviation
+        self.hidden_size = 1536
+        self.num_layers = 12
+        self.noise_std = 0.09  # Initial noise standard deviation
         self.noise_decay = 0.995  # Noise decay rate per epoch
         self.min_noise_std = 0.001  # Minimum noise level
         
         # Training parameters - enhanced stability defaults
-        self.batch_size = 32  # Reduced batch size for better generalization
+        self.batch_size = 64  # Reduced batch size for better generalization
         self.gradient_accumulation_steps = 4  # Number of steps to accumulate gradients
-        self.effective_batch_size = self.batch_size * self.gradient_accumulation_steps
-        self.learning_rate = 1e-4  # Further reduced learning rate for stability
+        self._effective_batch_size = None  # Will be calculated on demand
+        self.learning_rate = 5e-5  # Further reduced learning rate for stability
         self.weight_decay = 1e-4  # Increased L2 regularization
         self.min_epochs = 100  # Minimum number of epochs to train
         self.max_epochs = 300  # Extended training time
@@ -273,6 +273,11 @@ class OptimizedTrainingConfig:
             else:
                 print(f"Warning: Unknown config parameter '{key}'")
     
+    @property
+    def effective_batch_size(self):
+        """Calculate effective batch size from batch_size and gradient_accumulation_steps."""
+        return self.batch_size * self.gradient_accumulation_steps
+
     def validate(self):
         """Validate the configuration."""
         config_dict = {key: value for key, value in self.__dict__.items()
@@ -452,7 +457,7 @@ class OptimizedModel(nn.Module):
     """
     Optimized neural network with noise regularization and advanced techniques to prevent overfitting.
     """
-    def __init__(self, input_dim, output_dim, hidden_size=512, num_layers=4, noise_std=0.01):
+    def __init__(self, input_dim, output_dim, hidden_size=1024, num_layers=12, noise_std=0.09):
         super().__init__()
         self.input_dim = input_dim
         self.output_dim = output_dim
@@ -476,11 +481,22 @@ class OptimizedModel(nn.Module):
             )
             self.layers.append(layer)
         
-        # Output projection with L1 regularization
-        self.output_proj = nn.utils.spectral_norm(nn.Linear(hidden_size, output_dim))
+        # Separate prediction and confidence heads
+        self.pred_head = nn.utils.spectral_norm(nn.Linear(hidden_size, output_dim))
+        
+        # Confidence head with additional non-linearity
+        self.conf_head = nn.Sequential(
+            nn.utils.spectral_norm(nn.Linear(hidden_size, hidden_size // 2)),
+            nn.LayerNorm(hidden_size // 2),
+            nn.GELU(),
+            nn.utils.spectral_norm(nn.Linear(hidden_size // 2, 1))
+        )
         
         # Initialize weights with orthogonal initialization
         self.apply(self._init_weights)
+        
+        # Store dimensions for later use
+        self.output_dim = output_dim
     
     def _init_weights(self, module):
         """Initialize weights using Xavier/Glorot initialization."""
@@ -521,17 +537,56 @@ class OptimizedModel(nn.Module):
             # Residual connection with scaling
             x = 0.9 * x + 0.1 * residual  # Weighted residual connection
         
-        # Output projection with minimal noise
+        # Apply minimal noise before heads
         if self.training:
             noise = torch.randn_like(x) * (self.noise_std / 4)  # Even smaller noise at output
             x = x + noise
         
-        x = self.output_proj(x)
+        # Get predictions and confidence
+        predictions = self.pred_head(x)
+        confidence = self.conf_head(x)
         
-        return x
+        # Concatenate predictions and confidence
+        return torch.cat([predictions, confidence], dim=1)
 
 # --- Optimized Loss Functions ---
-# Using PyTorch's built-in L1Loss (Mean Absolute Error)
+class ConfidenceWeightedLoss(nn.Module):
+    """
+    带有置信度加权的损失函数。
+    模型输出的最后一个维度作为置信度分数，用于对整体预测进行加权。
+    """
+    def __init__(self, confidence_threshold=0.5, alpha=0.1, beta=0.05):
+        super().__init__()
+        self.confidence_threshold = confidence_threshold  # 置信度阈值
+        self.alpha = alpha  # 置信度正则化系数
+        self.beta = beta   # 阈值损失系数
+        self.base_criterion = nn.L1Loss(reduction='none')  # 基础损失函数
+        
+    def forward(self, outputs, targets):
+        # 分离预测值和置信度
+        predictions = outputs[:, :-1]  # 所有预测值
+        confidence = torch.sigmoid(outputs[:, -1])  # 最后一个值作为置信度
+        
+        # 计算基础预测误差 (batch_size,)
+        base_errors = self.base_criterion(predictions, targets).mean(dim=1)
+        
+        # 1. 加权预测损失：置信度越高的预测，其误差应该越小
+        prediction_loss = (confidence * base_errors).mean()
+        
+        # 2. 置信度正则化：防止模型总是输出极端置信度
+        confidence_reg = -self.alpha * (
+            torch.log(confidence + 1e-7) + torch.log(1 - confidence + 1e-7)
+        ).mean()
+        
+        # 3. 阈值损失：使用平滑过渡而不是硬阈值
+        # 使用sigmoid函数创建平滑权重，让低于阈值的样本也有小的贡献
+        smooth_weight = torch.sigmoid((confidence - self.confidence_threshold) * 10)  # *10控制过渡的陡峭程度
+        threshold_loss = self.beta * (smooth_weight * base_errors).mean()
+        
+        # 总损失
+        total_loss = prediction_loss + confidence_reg + threshold_loss
+        
+        return total_loss
 
 # --- Data Augmentation ---
 def mixup_data(x, y, alpha=0.2, device=None):
@@ -562,7 +617,7 @@ def mixup_data(x, y, alpha=0.2, device=None):
 
 # --- Optimized Training Function ---
 def train_model_optimized(data_dict, input_dim, output_dim, 
-                         hidden_size=512, num_layers=4, 
+                         hidden_size=1024, num_layers=12, 
                          model_name="optimized_model", config=None):
     """
     Optimized training function using single large tensors on GPU for maximum speed.
@@ -648,8 +703,12 @@ def train_model_optimized(data_dict, input_dim, output_dim,
         anneal_strategy=config.swa_anneal_strategy
     )
     
-    # Loss function
-    criterion = nn.L1Loss()
+    # Loss function with confidence weighting
+    criterion = ConfidenceWeightedLoss(
+        confidence_threshold=0.5,  # 初始置信度阈值
+        alpha=0.1,                 # 置信度正则化系数
+        beta=0.05                  # 阈值损失系数
+    )
     
     
     # Check for existing checkpoints and load if found
@@ -976,6 +1035,35 @@ def train_model_optimized(data_dict, input_dim, output_dim,
         raise e
 
 # --- Utility Functions ---
+
+def predict_with_confidence(model, inputs, confidence_threshold=0.5):
+    """
+    使用模型进行预测，并根据置信度过滤结果。
+    
+    Args:
+        model: 训练好的模型
+        inputs: 输入数据
+        confidence_threshold: 置信度阈值
+        
+    Returns:
+        tuple: (filtered_predictions, confidences, mask)
+        - filtered_predictions: 经过置信度过滤的预测值（低置信度的预测被置为0）
+        - confidences: 预测的置信度值
+        - mask: 置信度掩码（布尔值）
+    """
+    model.eval()
+    with torch.no_grad():
+        outputs = model(inputs)
+        predictions = outputs[:, :-1]  # 预测值
+        confidences = torch.sigmoid(outputs[:, -1])  # 置信度
+        
+        # 创建置信度掩码
+        mask = confidences > confidence_threshold
+        
+        # 将低置信度的预测置为0
+        filtered_predictions = predictions * mask.unsqueeze(1)
+        
+        return filtered_predictions, confidences, mask
 
 def plot_losses(train_losses, val_losses, train_last_ts, val_last_ts, test_last_ts, model_name="optimized_model"):
     """
@@ -1378,8 +1466,8 @@ if __name__ == "__main__":
     # Create configuration with validation
     config = OptimizedTrainingConfig()
     config.update(
-        hidden_size=512,
-        num_layers=4,
+        hidden_size=1024,
+        num_layers=12,
         batch_size=64  # Conservative batch size
     )
     
@@ -1387,9 +1475,9 @@ if __name__ == "__main__":
     config.validate()
     
     # Check GPU memory before training
-    if not check_gpu_memory(required_gb=2.0):
+    if not check_gpu_memory():
         print("Warning: Insufficient GPU memory detected. Consider reducing batch size.")
-        config.batch_size = min(config.batch_size, 32)
+        config.batch_size = min(config.batch_size, 64)
     
     print(f"Model configuration:")
     print(f"  Input dimension: {input_dim}")
@@ -1407,7 +1495,7 @@ if __name__ == "__main__":
     
     # Prepare optimized data
     data_dict = prepare_optimized_data(
-        X, Y, 
+        X, Y, T,
         batch_size=config.batch_size,
         val_split=config.val_split,
         test_split=config.test_split,
