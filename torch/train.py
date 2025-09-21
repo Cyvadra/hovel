@@ -19,7 +19,7 @@ from error_handling import (
     validate_tensor, validate_array, validate_positive,
     log_execution_time, handle_exception, check_gpu_memory
 )
-from config_validator import ConfigValidator, validate_training_config
+from config_validator import validate_training_config
 warnings.filterwarnings('ignore')
 
 # --- Checkpoint Management ---
