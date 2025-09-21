@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 import h5py
 import os
 import re
-from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
+from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts, LambdaLR, LinearLR, SequentialLR
 from torch.optim.swa_utils import AveragedModel, SWALR
 from torch.optim.lr_scheduler import CyclicLR
 from torch.nn import functional as F
@@ -242,6 +242,25 @@ class OptimizedTrainingConfig:
         self.swa_freq = 5  # Frequency of model averaging
         self.swa_anneal_epochs = 10  # Number of epochs to anneal for SWA
         self.swa_anneal_strategy = 'cos'  # Annealing strategy ('cos' or 'linear')
+        
+        # Learning rate warmup parameters
+        self.warmup_epochs = 10  # Number of epochs for warmup
+        self.warmup_start_lr = 1e-7  # Starting learning rate for warmup
+        
+        # EMA parameters
+        self.ema_decay = 0.999  # EMA decay rate
+        self.ema_start = 20  # Start EMA after this many epochs
+        
+        # Adaptive noise parameters
+        self.adaptive_noise = True  # Enable adaptive noise scaling
+        self.noise_grad_threshold = 1.0  # Gradient norm threshold for noise scaling
+        self.noise_scale_factor = 0.1  # Scaling factor for adaptive noise
+        
+        # Dynamic validation parameters
+        self.dynamic_val_freq = True  # Enable dynamic validation frequency
+        self.min_val_freq = 1  # Minimum validation frequency (every N epochs)
+        self.max_val_freq = 5  # Maximum validation frequency (every N epochs)
+        self.val_stability_threshold = 0.01  # Threshold for considering training stable
         
         # Model saving
         self.save_checkpoint_every = 20
@@ -575,8 +594,14 @@ def train_model_optimized(data_dict, input_dim, output_dim,
     # Create SWA model
     swa_model = AveragedModel(model)
     
-    # Track noise level
+    # Create EMA model
+    ema_model = AveragedModel(model, avg_fn=lambda avg, new, num: config.ema_decay * avg + (1 - config.ema_decay) * new)
+    
+    # Track noise level and gradient norms
     current_noise_std = config.noise_std
+    grad_norm_moving_avg = None
+    val_freq = config.min_val_freq
+    last_val_loss = float('inf')
     
     # Optimizer - Using Adam with more stable parameters
     optimizer = optim.Adam(
@@ -588,12 +613,26 @@ def train_model_optimized(data_dict, input_dim, output_dim,
         amsgrad=True  # AMSGrad variant for better stability
     )
     
-    # Learning rate scheduler
-    scheduler = CosineAnnealingWarmRestarts(
+    # Warmup scheduler
+    warmup_scheduler = LinearLR(
+        optimizer,
+        start_factor=config.warmup_start_lr / config.learning_rate,
+        total_iters=config.warmup_epochs
+    )
+    
+    # Main learning rate scheduler
+    main_scheduler = CosineAnnealingWarmRestarts(
         optimizer,
         T_0=config.scheduler_t0,
         T_mult=config.scheduler_t_mult,
         eta_min=config.scheduler_eta_min
+    )
+    
+    # Combined scheduler with warmup
+    scheduler = SequentialLR(
+        optimizer,
+        schedulers=[warmup_scheduler, main_scheduler],
+        milestones=[config.warmup_epochs]
     )
     
     # SWA scheduler
@@ -712,28 +751,65 @@ def train_model_optimized(data_dict, input_dim, output_dim,
                 
                 epoch_train_loss += loss.item()
             
-            # Validation phase
-            model.eval()
-            epoch_val_loss = 0
-            
-            with torch.no_grad():
-                for i in range(num_val_batches):
-                    start_idx = i * batch_size
-                    end_idx = start_idx + batch_size
-                    inputs = X_val[start_idx:end_idx]
-                    targets = Y_val[start_idx:end_idx]
-                    
-                    outputs = model(inputs)
-                    loss = criterion(outputs, targets)
-                    
-                    epoch_val_loss += loss.item()
-            
-            # Calculate average losses
-            avg_train_loss = epoch_train_loss / num_train_batches
-            avg_val_loss = epoch_val_loss / num_val_batches
+            # Validation phase (with dynamic frequency)
+            if (epoch + 1) % val_freq == 0 or epoch == 0:
+                model.eval()
+                epoch_val_loss = 0
+                
+                with torch.no_grad():
+                    for i in range(num_val_batches):
+                        start_idx = i * batch_size
+                        end_idx = start_idx + batch_size
+                        inputs = X_val[start_idx:end_idx]
+                        targets = Y_val[start_idx:end_idx]
+                        
+                        outputs = model(inputs)
+                        loss = criterion(outputs, targets)
+                        
+                        epoch_val_loss += loss.item()
+                
+                # Calculate average losses
+                avg_train_loss = epoch_train_loss / num_train_batches
+                avg_val_loss = epoch_val_loss / num_val_batches
+            else:
+                # Skip validation, use previous validation loss
+                avg_train_loss = epoch_train_loss / num_train_batches
+                avg_val_loss = val_losses[-1] if val_losses else float('inf')
             
             train_losses.append(avg_train_loss)
             val_losses.append(avg_val_loss)
+            
+            # Calculate gradient norm for adaptive noise
+            total_grad_norm = 0.0
+            for p in model.parameters():
+                if p.grad is not None:
+                    total_grad_norm += p.grad.data.norm(2).item() ** 2
+            total_grad_norm = total_grad_norm ** 0.5
+            
+            # Update gradient norm moving average
+            if grad_norm_moving_avg is None:
+                grad_norm_moving_avg = total_grad_norm
+            else:
+                grad_norm_moving_avg = 0.95 * grad_norm_moving_avg + 0.05 * total_grad_norm
+            
+            # Adaptive noise based on gradient norm
+            if config.adaptive_noise:
+                noise_scale = min(1.0, config.noise_grad_threshold / (total_grad_norm + 1e-8))
+                current_noise_std = max(
+                    config.min_noise_std,
+                    config.noise_std * noise_scale * config.noise_scale_factor
+                )
+            else:
+                current_noise_std = max(
+                    config.min_noise_std,
+                    current_noise_std * config.noise_decay
+                )
+            
+            # Update model noise level
+            if isinstance(model, nn.DataParallel):
+                model.module.noise_std = current_noise_std
+            else:
+                model.noise_std = current_noise_std
             
             # Learning rate and SWA scheduling
             if epoch < config.swa_start:
@@ -747,15 +823,18 @@ def train_model_optimized(data_dict, input_dim, output_dim,
                 if (epoch + 1) % config.swa_freq == 0:
                     swa_model.update_parameters(model)
             
-            # Update noise level with decay
-            current_noise_std = max(
-                config.min_noise_std,
-                current_noise_std * config.noise_decay
-            )
-            if isinstance(model, nn.DataParallel):
-                model.module.noise_std = current_noise_std
-            else:
-                model.noise_std = current_noise_std
+            # Update EMA model
+            if epoch >= config.ema_start:
+                ema_model.update_parameters(model)
+            
+            # Dynamic validation frequency
+            if config.dynamic_val_freq:
+                val_loss_change = abs(avg_val_loss - last_val_loss)
+                if val_loss_change < config.val_stability_threshold:
+                    val_freq = min(val_freq + 1, config.max_val_freq)
+                else:
+                    val_freq = config.min_val_freq
+                last_val_loss = avg_val_loss
             
             # Update metrics
             metrics.update(
@@ -816,6 +895,11 @@ def train_model_optimized(data_dict, input_dim, output_dim,
         torch.save(swa_model.state_dict(), swa_model_path)
         logger.info(f"SWA model saved to {swa_model_path}")
         
+        # Save EMA model
+        ema_model_path = f'{model_name}_ema_model.pth'
+        torch.save(ema_model.state_dict(), ema_model_path)
+        logger.info(f"EMA model saved to {ema_model_path}")
+        
         # Load the best model for comparison
         logger.info("Loading the best model state for comparison.")
         state_dict = torch.load(best_model_path, map_location=device)
@@ -828,24 +912,39 @@ def train_model_optimized(data_dict, input_dim, output_dim,
                 new_state_dict[key] = value
         model.load_state_dict(new_state_dict)
         
-        # Final evaluation on test set
-        model.eval()
-        test_loss = 0
+        # Final evaluation on test set for all models
+        def evaluate_model(model, model_name):
+            model.eval()
+            test_loss = 0
+            
+            with torch.no_grad():
+                for i in range(num_test_batches):
+                    start_idx = i * batch_size
+                    end_idx = start_idx + batch_size
+                    inputs = X_test[start_idx:end_idx]
+                    targets = Y_test[start_idx:end_idx]
+                    
+                    outputs = model(inputs)
+                    loss = criterion(outputs, targets)
+                    
+                    test_loss += loss.item()
+            
+            return test_loss / num_test_batches
         
-        with torch.no_grad():
-            for i in range(num_test_batches):
-                start_idx = i * batch_size
-                end_idx = start_idx + batch_size
-                inputs = X_test[start_idx:end_idx]
-                targets = Y_test[start_idx:end_idx]
-                
-                outputs = model(inputs)
-                loss = criterion(outputs, targets)
-                
-                test_loss += loss.item()
+        # Evaluate all models
+        regular_test_loss = evaluate_model(model, "Regular")
+        swa_test_loss = evaluate_model(swa_model, "SWA")
+        ema_test_loss = evaluate_model(ema_model, "EMA")
         
-        final_test_loss = test_loss / num_test_batches
-        logger.info(f"Final Test Loss: {final_test_loss:.6f}")
+        logger.info(f"Final Test Losses:")
+        logger.info(f"  Regular Model: {regular_test_loss:.6f}")
+        logger.info(f"  SWA Model: {swa_test_loss:.6f}")
+        logger.info(f"  EMA Model: {ema_test_loss:.6f}")
+        
+        # Use the best performing model
+        final_test_loss = min(regular_test_loss, swa_test_loss, ema_test_loss)
+        best_model_type = "Regular" if regular_test_loss == final_test_loss else ("SWA" if swa_test_loss == final_test_loss else "EMA")
+        logger.info(f"Best performing model: {best_model_type} with loss: {final_test_loss:.6f}")
         
         # Log training summary
         metrics.log_summary(logger)
