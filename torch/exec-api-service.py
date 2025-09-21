@@ -162,8 +162,8 @@ class ModelManager:
                 self.input_dim = new_state_dict['input_proj.weight'].shape[1]
             else:
                 # Default values if we can't infer
-                self.input_dim = 512
-                logger.warning("Could not infer input_dim from model, using default: 512")
+                self.input_dim = 1470
+                logger.warning("Could not infer input_dim from model, using default: 1470")
             
             # Look for output_proj.weight to get output_dim
             if 'output_proj.weight' in new_state_dict:
@@ -171,8 +171,8 @@ class ModelManager:
                 self.output_dim = new_state_dict['output_proj.weight'].shape[0]
             else:
                 # Default values if we can't infer
-                self.output_dim = 1
-                logger.warning("Could not infer output_dim from model, using default: 1")
+                self.output_dim = 5
+                logger.warning("Could not infer output_dim from model, using default: 5")
             
             # Create the model with parsed parameters
             self.model = OptimizedModel(
@@ -180,7 +180,6 @@ class ModelManager:
                 output_dim=self.output_dim,
                 hidden_size=self.hidden_size,
                 num_layers=self.num_layers,
-                dropout_rate=0.1
             )
             
             # Load the state dict

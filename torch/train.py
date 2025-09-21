@@ -562,7 +562,7 @@ def mixup_data(x, y, alpha=0.2, device=None):
 
 # --- Optimized Training Function ---
 def train_model_optimized(data_dict, input_dim, output_dim, 
-                         hidden_size=512, num_layers=4, dropout_rate=0.1, 
+                         hidden_size=512, num_layers=4, 
                          model_name="optimized_model", config=None):
     """
     Optimized training function using single large tensors on GPU for maximum speed.
@@ -576,7 +576,6 @@ def train_model_optimized(data_dict, input_dim, output_dim,
         config.update(
             hidden_size=hidden_size,
             num_layers=num_layers,
-            dropout_rate=dropout_rate
         )
     
     # Setup logging
@@ -1381,7 +1380,6 @@ if __name__ == "__main__":
     config.update(
         hidden_size=512,
         num_layers=4,
-        dropout_rate=0.1,
         batch_size=64  # Conservative batch size
     )
     
@@ -1399,7 +1397,6 @@ if __name__ == "__main__":
     print(f"  Model output dimension: {output_dim} (direct predictions)")
     print(f"  Hidden size: {config.hidden_size}")
     print(f"  Number of layers: {config.num_layers}")
-    print(f"  Dropout rate: {config.dropout_rate}")
     print(f"  Batch size: {config.batch_size}")
     print(f"  Min epochs: {config.min_epochs}")
     print(f"  Max epochs: {config.max_epochs}")
