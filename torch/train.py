@@ -1054,6 +1054,316 @@ def save_training_config(config, model_name):
     
     print(f"Configuration saved to {config_file}")
 
+# --- Knowledge Distillation (Teacher -> Student) ---
+def _parse_model_params_from_filename(filename):
+    """Try to parse hidden_size and num_layers from filename. Returns (hs, nl) or (None, None)."""
+    try:
+        patterns = [
+            r".*?(\d+)_layers_(\d+).*?\\.pth$",
+            r".*?model_(\d+)_layers_(\d+).*?\\.pth$",
+            r".*?(\d+)_(\d+).*?\\.pth$",
+        ]
+        for pat in patterns:
+            m = re.match(pat, os.path.basename(filename))
+            if m:
+                return int(m.group(1)), int(m.group(2))
+    except Exception:
+        pass
+    return None, None
+
+def _infer_arch_from_state_dict(state_dict, input_dim, output_dim):
+    """Infer (hidden_size, num_layers) from an OptimizedModel state_dict."""
+    hidden_size = None
+    num_layers = 0
+    # Remove 'module.' prefix if present for inspection only
+    keys = list(state_dict.keys())
+    if any(k.startswith('module.') for k in keys):
+        state_dict = {k[len('module.'):] if k.startswith('module.') else k: v for k, v in state_dict.items()}
+        keys = list(state_dict.keys())
+    # Infer hidden_size from input_proj
+    if 'input_proj.weight' in state_dict:
+        w = state_dict['input_proj.weight']
+        # weight shape: [hidden_size, input_dim]
+        if w.dim() == 2 and w.shape[1] == input_dim:
+            hidden_size = int(w.shape[0])
+    # Infer num_layers by counting distinct indices under 'layers.{i}.'
+    layer_indices = set()
+    for k in keys:
+        if k.startswith('layers.'):
+            parts = k.split('.')
+            if len(parts) >= 2 and parts[1].isdigit():
+                layer_indices.add(int(parts[1]))
+    if layer_indices:
+        num_layers = max(layer_indices) + 1
+    return hidden_size, num_layers
+
+def _load_teacher_model(teacher_path, device, input_dim, output_dim):
+    """Load a teacher OptimizedModel from path, inferring its architecture if needed."""
+    raw = torch.load(teacher_path, map_location=device)
+    if isinstance(raw, dict) and 'model_state_dict' in raw:
+        state_dict = raw['model_state_dict']
+    elif isinstance(raw, dict):
+        state_dict = raw
+    else:
+        raise RuntimeError("Unsupported teacher checkpoint format")
+    # Try filename parse first
+    hs, nl = _parse_model_params_from_filename(teacher_path)
+    if hs is None or nl is None:
+        ihs, inl = _infer_arch_from_state_dict(state_dict, input_dim, output_dim)
+        hs = hs or ihs
+        nl = nl or inl
+    if hs is None or nl is None:
+        raise RuntimeError("Failed to infer teacher architecture (hidden_size/num_layers). Please follow filename pattern or supply compatible checkpoint.")
+    teacher = OptimizedModel(input_dim, output_dim, hidden_size=hs, num_layers=nl, noise_std=0.0)
+    # Strip DataParallel prefix if present
+    cleaned_state = {}
+    for k, v in state_dict.items():
+        if k.startswith('module.'):
+            cleaned_state[k[7:]] = v
+        else:
+            cleaned_state[k] = v
+    teacher.load_state_dict(cleaned_state, strict=False)
+    teacher.to(device)
+    teacher.eval()
+    return teacher, hs, nl
+
+def distill_model_optimized(
+    data_dict,
+    input_dim,
+    output_dim,
+    teacher_model_path,
+    student_hidden_size=128,
+    student_num_layers=2,
+    temperature=3.0,
+    alpha=0.7,
+    model_name="distilled_student",
+    base_config=None,
+):
+    """
+    Distill a student model from a teacher using the optimized training pipeline.
+
+    Args:
+        data_dict: Output of prepare_optimized_data
+        input_dim (int): Input feature dimension
+        output_dim (int): Output dimension
+        teacher_model_path (str): Path to teacher .pth file
+        student_hidden_size (int): Student hidden size
+        student_num_layers (int): Student number of layers
+        temperature (float): Temperature for soft targets
+        alpha (float): Weight for distillation loss vs ground-truth loss
+        model_name (str): Base name for saved artifacts
+        base_config (OptimizedTrainingConfig|None): Optional training config to reuse
+
+    Returns:
+        (student_model, train_losses, val_losses, final_val_loss)
+    """
+    best_model_path = f"{model_name}_best_model.pth"
+
+    # Setup logging and device
+    logger = setup_logging(model_name)
+    metrics = TrainingMetrics()
+    device = setup_gpu()
+    logger.info(f"Using device: {device}")
+    show_gpu_memory_usage()
+
+    # Load teacher
+    teacher, teacher_hs, teacher_nl = _load_teacher_model(teacher_model_path, device, input_dim, output_dim)
+    logger.info(f"Loaded teacher model (hidden_size={teacher_hs}, num_layers={teacher_nl}) from {teacher_model_path}")
+
+    # Build student
+    config = base_config or OptimizedTrainingConfig()
+    config.update(hidden_size=student_hidden_size, num_layers=student_num_layers)
+
+    student = OptimizedModel(input_dim, output_dim, config.hidden_size, config.num_layers, config.noise_std)
+    if torch.cuda.device_count() > 1:
+        logger.info(f"Using {torch.cuda.device_count()} GPUs for student!")
+        student = nn.DataParallel(student)
+    student.to(device)
+
+    # SWA and EMA for student
+    swa_model = AveragedModel(student)
+    ema_model = AveragedModel(student, avg_fn=lambda avg, new, num: config.ema_decay * avg + (1 - config.ema_decay) * new)
+
+    # Optimizer and schedulers
+    optimizer = optim.Adam(
+        student.parameters(), lr=config.learning_rate, weight_decay=config.weight_decay, betas=(0.9, 0.999), eps=1e-8, amsgrad=True
+    )
+    warmup_scheduler = LinearLR(
+        optimizer, start_factor=config.warmup_start_lr / config.learning_rate, total_iters=config.warmup_epochs
+    )
+    main_scheduler = CosineAnnealingWarmRestarts(
+        optimizer, T_0=config.scheduler_t0, T_mult=config.scheduler_t_mult, eta_min=config.scheduler_eta_min
+    )
+    scheduler = SequentialLR(optimizer, schedulers=[warmup_scheduler, main_scheduler], milestones=[config.warmup_epochs])
+    swa_scheduler = SWALR(
+        optimizer, swa_lr=config.swa_lr, anneal_epochs=config.swa_anneal_epochs, anneal_strategy=config.swa_anneal_strategy
+    )
+
+    # Losses
+    l1 = nn.L1Loss()
+
+    # Extract data tensors
+    X_train, Y_train = data_dict['train']
+    X_val, Y_val = data_dict['val']
+    batch_size = data_dict['batch_size']
+    num_train_batches = data_dict['num_train_batches']
+    num_val_batches = data_dict['num_val_batches']
+
+    logger.info(
+        f"Starting distillation: student(hs={config.hidden_size}, layers={config.num_layers}), temp={temperature}, alpha={alpha}"
+    )
+
+    current_noise_std = config.noise_std
+    grad_norm_moving_avg = None
+    val_freq = config.min_val_freq
+    last_val_loss = float('inf')
+    best_val_loss = float('inf')
+    patience_counter = 0
+    train_losses = []
+    val_losses = []
+
+    try:
+        for epoch in range(0, config.max_epochs):
+            epoch_start_time = time.time()
+            student.train()
+            epoch_train_loss = 0.0
+            optimizer.zero_grad()
+
+            for i in range(num_train_batches):
+                start_idx = i * batch_size
+                end_idx = start_idx + batch_size
+                inputs = X_train[start_idx:end_idx]
+                targets = Y_train[start_idx:end_idx]
+
+                if config.mixup_alpha > 0:
+                    inputs, targets, _ = mixup_data(inputs, targets, config.mixup_alpha, device)
+
+                with torch.no_grad():
+                    teacher_outputs = teacher(inputs)
+
+                student_outputs = student(inputs)
+                loss_gt = l1(student_outputs, targets)
+                loss_kd = l1(student_outputs / temperature, teacher_outputs / temperature)
+                loss = ((1 - alpha) * loss_gt + alpha * loss_kd) / config.gradient_accumulation_steps
+
+                loss.backward()
+                if (i + 1) % config.gradient_accumulation_steps == 0:
+                    torch.nn.utils.clip_grad_norm_(student.parameters(), max_norm=config.gradient_clip_norm)
+                    optimizer.step()
+                    optimizer.zero_grad()
+
+                epoch_train_loss += loss.item()
+
+            # Validation
+            if (epoch + 1) % val_freq == 0 or epoch == 0:
+                student.eval()
+                epoch_val_loss = 0.0
+                with torch.no_grad():
+                    for i in range(num_val_batches):
+                        start_idx = i * batch_size
+                        end_idx = start_idx + batch_size
+                        inputs = X_val[start_idx:end_idx]
+                        targets = Y_val[start_idx:end_idx]
+                        teacher_outputs = teacher(inputs)
+                        student_outputs = student(inputs)
+                        loss_gt = l1(student_outputs, targets)
+                        loss_kd = l1(student_outputs / temperature, teacher_outputs / temperature)
+                        loss = (1 - alpha) * loss_gt + alpha * loss_kd
+                        epoch_val_loss += loss.item()
+
+                avg_train_loss = epoch_train_loss / max(1, num_train_batches)
+                avg_val_loss = epoch_val_loss / max(1, num_val_batches)
+            else:
+                avg_train_loss = epoch_train_loss / max(1, num_train_batches)
+                avg_val_loss = val_losses[-1] if val_losses else float('inf')
+
+            train_losses.append(avg_train_loss)
+            val_losses.append(avg_val_loss)
+
+            # Gradient norm for adaptive noise
+            total_grad_norm_sq = 0.0
+            for p in student.parameters():
+                if p.grad is not None:
+                    total_grad_norm_sq += p.grad.data.norm(2).item() ** 2
+            total_grad_norm = total_grad_norm_sq ** 0.5
+            if grad_norm_moving_avg is None:
+                grad_norm_moving_avg = total_grad_norm
+            else:
+                grad_norm_moving_avg = 0.95 * grad_norm_moving_avg + 0.05 * total_grad_norm
+
+            # Adaptive noise on student
+            if config.adaptive_noise:
+                noise_scale = min(1.0, config.noise_grad_threshold / (total_grad_norm + 1e-8))
+                current_noise_std = max(config.min_noise_std, config.noise_std * noise_scale * config.noise_scale_factor)
+            else:
+                current_noise_std = max(config.min_noise_std, current_noise_std * config.noise_decay)
+            if isinstance(student, nn.DataParallel):
+                student.module.noise_std = current_noise_std
+            else:
+                student.noise_std = current_noise_std
+
+            # LR scheduling and SWA
+            if epoch < config.swa_start:
+                scheduler.step()
+                current_lr = optimizer.param_groups[0]['lr']
+            else:
+                swa_scheduler.step()
+                current_lr = config.swa_lr
+                if (epoch + 1) % config.swa_freq == 0:
+                    swa_model.update_parameters(student)
+
+            # EMA update
+            if epoch >= config.ema_start:
+                ema_model.update_parameters(student)
+
+            # Dynamic val frequency
+            if config.dynamic_val_freq:
+                val_loss_change = abs(avg_val_loss - last_val_loss)
+                if val_loss_change < config.val_stability_threshold:
+                    val_freq = min(val_freq + 1, config.max_val_freq)
+                else:
+                    val_freq = config.min_val_freq
+                last_val_loss = avg_val_loss
+
+            # Metrics/logging
+            metrics.update(epoch + 1, avg_train_loss, avg_val_loss, current_lr, noise_std=current_noise_std)
+            torch.cuda.synchronize()
+            epoch_time = time.time() - epoch_start_time
+            logger.info(
+                f"[KD] Epoch [{epoch+1:3d}/{config.max_epochs}] Train: {avg_train_loss:.6f} Val: {avg_val_loss:.6f} LR: {current_lr:.2e} Time: {epoch_time:.2f}s"
+            )
+
+            # Early stopping + save best
+            if avg_val_loss < best_val_loss:
+                best_val_loss = avg_val_loss
+                patience_counter = 0
+                torch.save(student.state_dict(), best_model_path)
+                logger.info(f"  -> New best distilled student saved to {best_model_path}")
+            else:
+                patience_counter += 1
+                if epoch + 1 >= config.min_epochs and patience_counter >= config.patience:
+                    logger.info("  -> Early stopping for distillation")
+                    break
+
+        # Save SWA/EMA variants
+        swa_model_path = f"{model_name}_swa_model.pth"
+        torch.save(swa_model.state_dict(), swa_model_path)
+        logger.info(f"SWA student model saved to {swa_model_path}")
+        ema_model_path = f"{model_name}_ema_model.pth"
+        torch.save(ema_model.state_dict(), ema_model_path)
+        logger.info(f"EMA student model saved to {ema_model_path}")
+
+        metrics.log_summary(logger)
+        return student, train_losses, val_losses, best_val_loss
+
+    except KeyboardInterrupt:
+        logger.info("Distillation interrupted by user. Saving current student model...")
+        torch.save(student.state_dict(), f"{model_name}_interrupted.pth")
+        return student, train_losses, val_losses, None
+    except Exception as e:
+        logger.error(f"Distillation failed with error: {e}")
+        raise e
+
 # --- Main Execution ---
 if __name__ == "__main__":
     print("Starting Optimized PyTorch Training")
