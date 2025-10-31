@@ -1,0 +1,1 @@
+pip install pandas numpy matplotlib mpl_finance pydantic fastapi uvicorn
